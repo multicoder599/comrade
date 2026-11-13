@@ -1,0 +1,386 @@
+import { useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { trpc } from "@/providers/trpc";
+import { errorMessage } from "@/lib/auth";
+import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
+import { Plus, Pencil, Search } from "lucide-react";
+
+type ProductRow = {
+  id: number;
+  sku: string;
+  name: string;
+  category: string;
+  unit: string;
+  buyingPrice: number;
+  retailPrice: number;
+  wholesalePrice: number;
+  wholesaleMinQty: number;
+  allowBargain: boolean;
+  active: boolean;
+  stockA: number;
+  stockB: number;
+};
+
+type FormState = {
+  sku: string;
+  name: string;
+  category: string;
+  unit: string;
+  buyingPrice: string;
+  retailPrice: string;
+  wholesalePrice: string;
+  wholesaleMinQty: string;
+  allowBargain: boolean;
+};
+
+const EMPTY_FORM: FormState = {
+  sku: "",
+  name: "",
+  category: "General",
+  unit: "pc",
+  buyingPrice: "",
+  retailPrice: "",
+  wholesalePrice: "",
+  wholesaleMinQty: "1",
+  allowBargain: true,
+};
+
+export default function Products() {
+  const [search, setSearch] = useState("");
+  const listQuery = trpc.products.listAll.useQuery(
+    { search: search || undefined },
+    { placeholderData: (prev) => prev },
+  );
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<ProductRow | null>(null);
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = trpc.products.create.useMutation({
+    onSuccess: () => {
+      listQuery.refetch();
+      setDialogOpen(false);
+    },
+    onError: (e) => setError(errorMessage(e)),
+  });
+  const update = trpc.products.update.useMutation({
+    onSuccess: () => {
+      listQuery.refetch();
+      setDialogOpen(false);
+    },
+    onError: (e) => setError(errorMessage(e)),
+  });
+
+  const rows = useMemo(
+    () => (listQuery.data ?? []) as ProductRow[],
+    [listQuery.data],
+  );
+
+  function openCreate() {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setError(null);
+    setDialogOpen(true);
+  }
+
+  function openEdit(p: ProductRow) {
+    setEditing(p);
+    setForm({
+      sku: p.sku,
+      name: p.name,
+      category: p.category,
+      unit: p.unit,
+      buyingPrice: formatPlain(p.buyingPrice),
+      retailPrice: formatPlain(p.retailPrice),
+      wholesalePrice: formatPlain(p.wholesalePrice),
+      wholesaleMinQty: String(p.wholesaleMinQty),
+      allowBargain: p.allowBargain,
+    });
+    setError(null);
+    setDialogOpen(true);
+  }
+
+  function save() {
+    const buyingPrice = parseKes(form.buyingPrice);
+    const retailPrice = parseKes(form.retailPrice);
+    const wholesalePrice = parseKes(form.wholesalePrice);
+    if (!form.sku.trim() || !form.name.trim()) {
+      setError("SKU and name are required");
+      return;
+    }
+    if (buyingPrice === null || retailPrice === null || wholesalePrice === null) {
+      setError("Enter valid prices");
+      return;
+    }
+    const payload = {
+      sku: form.sku.trim(),
+      name: form.name.trim(),
+      category: form.category.trim() || "General",
+      unit: form.unit.trim() || "pc",
+      buyingPrice,
+      retailPrice,
+      wholesalePrice,
+      wholesaleMinQty: Number(form.wholesaleMinQty) || 1,
+      allowBargain: form.allowBargain,
+    };
+    setError(null);
+    if (editing) {
+      update.mutate({ id: editing.id, ...payload });
+    } else {
+      create.mutate(payload);
+    }
+  }
+
+  const busy = create.isPending || update.isPending;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <p className="micro-label">Catalogue</p>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">
+            Products &amp; prices
+          </h1>
+        </div>
+        <Button
+          onClick={openCreate}
+          className="bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5"
+        >
+          <Plus className="size-4" />
+          New product
+        </Button>
+      </div>
+
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search name or SKU…"
+          className="pl-9 bg-card border-input"
+        />
+      </div>
+
+      <div className="rounded-lg border border-border bg-card overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="border-border hover:bg-transparent">
+              <TableHead>Product</TableHead>
+              <TableHead className="text-right">Buying</TableHead>
+              <TableHead className="text-right">Retail</TableHead>
+              <TableHead className="text-right">Wholesale</TableHead>
+              <TableHead className="text-right">Margin</TableHead>
+              <TableHead className="text-center">Bargain</TableHead>
+              <TableHead className="text-right">Stock A</TableHead>
+              <TableHead className="text-right">Stock B</TableHead>
+              <TableHead className="text-center">Active</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((p) => {
+              const margin = p.retailPrice - p.buyingPrice;
+              return (
+                <TableRow key={p.id} className="border-border">
+                  <TableCell>
+                    <p className="font-medium">{p.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {p.sku} · {p.category} · per {p.unit}
+                    </p>
+                  </TableCell>
+                  <TableCell className="text-right font-figures text-muted-foreground">
+                    {formatKes(p.buyingPrice)}
+                  </TableCell>
+                  <TableCell className="text-right font-figures">
+                    {formatKes(p.retailPrice)}
+                  </TableCell>
+                  <TableCell className="text-right font-figures">
+                    {formatKes(p.wholesalePrice)}
+                    <span className="block text-[10px] text-muted-foreground">
+                      min {formatQty(p.wholesaleMinQty)}
+                    </span>
+                  </TableCell>
+                  <TableCell
+                    className={`text-right font-figures ${margin >= 0 ? "text-primary" : "text-destructive"}`}
+                  >
+                    {formatKes(margin)}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {p.allowBargain ? (
+                      <span className="text-warning text-xs font-medium">YES</span>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">fixed</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right font-figures">
+                    {formatQty(p.stockA)}
+                  </TableCell>
+                  <TableCell className="text-right font-figures">
+                    {formatQty(p.stockB)}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <Switch
+                      checked={p.active}
+                      onCheckedChange={(active) =>
+                        update.mutate({ id: p.id, active })
+                      }
+                      aria-label={`Toggle ${p.name}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openEdit(p)}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+            {rows.length === 0 && (
+              <TableRow className="border-border">
+                <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
+                  No products found.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="bg-card border-border sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              {editing ? `Edit ${editing.name}` : "New product"}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Set prices and details for this product
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>SKU / code</Label>
+              <Input
+                value={form.sku}
+                onChange={(e) => setForm({ ...form, sku: e.target.value })}
+                className="bg-background border-input"
+                placeholder="SUGAR1KG"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Category</Label>
+              <Input
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                className="bg-background border-input"
+              />
+            </div>
+            <div className="col-span-2 space-y-1.5">
+              <Label>Name</Label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="bg-background border-input"
+                placeholder="Mumias Sugar 1kg"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Unit</Label>
+              <Input
+                value={form.unit}
+                onChange={(e) => setForm({ ...form, unit: e.target.value })}
+                className="bg-background border-input"
+                placeholder="pc / kg / litre"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Buying price (KES)</Label>
+              <Input
+                inputMode="decimal"
+                value={form.buyingPrice}
+                onChange={(e) => setForm({ ...form, buyingPrice: e.target.value })}
+                className="bg-background border-input font-figures"
+                placeholder="145"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Retail selling price (KES)</Label>
+              <Input
+                inputMode="decimal"
+                value={form.retailPrice}
+                onChange={(e) => setForm({ ...form, retailPrice: e.target.value })}
+                className="bg-background border-input font-figures"
+                placeholder="165"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Wholesale price (KES)</Label>
+              <Input
+                inputMode="decimal"
+                value={form.wholesalePrice}
+                onChange={(e) => setForm({ ...form, wholesalePrice: e.target.value })}
+                className="bg-background border-input font-figures"
+                placeholder="155"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Wholesale min qty</Label>
+              <Input
+                inputMode="decimal"
+                value={form.wholesaleMinQty}
+                onChange={(e) =>
+                  setForm({ ...form, wholesaleMinQty: e.target.value })
+                }
+                className="bg-background border-input font-figures"
+              />
+            </div>
+            <div className="flex items-center gap-2.5 pt-6">
+              <Switch
+                id="allow-bargain"
+                checked={form.allowBargain}
+                onCheckedChange={(allowBargain) => setForm({ ...form, allowBargain })}
+              />
+              <Label htmlFor="allow-bargain" className="cursor-pointer">
+                Allow price bargaining
+              </Label>
+            </div>
+          </div>
+          {error && (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          )}
+          <Button
+            onClick={save}
+            disabled={busy}
+            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
+          >
+            {busy ? "Saving…" : editing ? "Save changes" : "Create product"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Comrade Shop POS — dark terminal theme.
+       Background near-black, elevated surfaces, mint primary accent. */
+    --background: 0 0% 4.7%;        /* #0c0c0c */
+    --foreground: 0 0% 100%;
+    --card: 0 0% 7.8%;              /* #141414 */
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 8.5%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 165 84% 43%;         /* mint #00d9a3 */
+    --primary-foreground: 0 0% 4.7%;
+    --secondary: 0 0% 10.2%;        /* #1a1a1a */
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 10.2%;
+    --muted-foreground: 240 5% 60%; /* #95959f */
+    --accent: 158 62% 23%;          /* deep forest #165f49 */
+    --accent-foreground: 137 100% 85%;
+    --destructive: 0 100% 63%;      /* #ff4444 */
+    --destructive-foreground: 0 0% 100%;
+    --warning: 52 99% 56%;          /* #fee420 */
+    --warning-foreground: 0 0% 4.7%;
+    --border: 0 0% 14%;
+    --input: 0 0% 16%;
+    --ring: 165 84% 43%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 6.5%;
+    --sidebar-foreground: 240 5% 60%;
+    --sidebar-primary: 165 84% 43%;
+    --sidebar-primary-foreground: 0 0% 4.7%;
+    --sidebar-accent: 0 0% 10.2%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 13%;
+    --sidebar-ring: 165 84% 43%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: "tnum" 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: hsl(var(--warning));
+    color: hsl(var(--warning-foreground));
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: "Space Grotesk", "Inter", sans-serif;
+  }
+  .font-figures {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .micro-label {
+    @apply text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground;
+  }
+}
+
+/* Receipt print styles */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #receipt-print,
+  #receipt-print * {
+    visibility: visible;
+  }
+  #receipt-print {
+    position: absolute;
+    inset: 0;
+    background: #fff !important;
+    color: #000 !important;
+  }
+}
