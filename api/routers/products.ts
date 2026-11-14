@@ -7,6 +7,7 @@ import { createRouter, authedQuery, adminQuery } from "../middleware";
 
 const productInput = z.object({
   sku: z.string().min(1).max(50),
+  barcode: z.string().max(60).optional(),
   name: z.string().min(1).max(120),
   category: z.string().min(1).max(60).default("General"),
   unit: z.string().min(1).max(20).default("pc"),
@@ -16,6 +17,25 @@ const productInput = z.object({
   wholesaleMinQty: z.number().min(0).default(1),
   allowBargain: z.boolean().default(true),
 });
+
+function assertBarcodeFree(
+  db: ReturnType<typeof getDb>,
+  barcode: string | null | undefined,
+  exceptId?: number,
+) {
+  if (!barcode) return;
+  const clash = db
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(eq(products.barcode, barcode))
+    .get();
+  if (clash && clash.id !== exceptId) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Barcode already used by "${clash.name}"`,
+    });
+  }
+}
 
 export const productsRouter = createRouter({
   // Till catalogue: active products with the stock level of one shop.
@@ -53,7 +73,11 @@ export const productsRouter = createRouter({
         .from(products)
         .where(
           term
-            ? or(like(products.name, `%${term}%`), like(products.sku, `%${term}%`))
+            ? or(
+                like(products.name, `%${term}%`),
+                like(products.sku, `%${term}%`),
+                like(products.barcode, `%${term}%`),
+              )
             : undefined,
         )
         .all();
@@ -73,11 +97,13 @@ export const productsRouter = createRouter({
     if (existing) {
       throw new TRPCError({ code: "CONFLICT", message: "SKU already exists" });
     }
+    const barcode = input.barcode?.trim() || null;
+    assertBarcodeFree(db, barcode);
     const now = new Date().toISOString();
     const tx = db.transaction((t) => {
       const info = t
         .insert(products)
-        .values({ ...input, createdAt: now, updatedAt: now })
+        .values({ ...input, barcode, createdAt: now, updatedAt: now })
         .run();
       const id = Number(info.lastInsertRowid);
       t.insert(stocks).values({ productId: id, shop: "A", qty: 0 }).run();
@@ -98,10 +124,37 @@ export const productsRouter = createRouter({
         const clash = db.select().from(products).where(eq(products.sku, rest.sku)).get();
         if (clash) throw new TRPCError({ code: "CONFLICT", message: "SKU already exists" });
       }
+      const barcode =
+        rest.barcode !== undefined ? rest.barcode?.trim() || null : undefined;
+      assertBarcodeFree(db, barcode, id);
       db.update(products)
-        .set({ ...rest, ...(active !== undefined ? { active } : {}), updatedAt: new Date().toISOString() })
+        .set({
+          ...rest,
+          ...(barcode !== undefined ? { barcode } : {}),
+          ...(active !== undefined ? { active } : {}),
+          updatedAt: new Date().toISOString(),
+        })
         .where(eq(products.id, id))
         .run();
+      return { ok: true };
+    }),
+
+  // Permanently delete a product (stock rows go with it). Past sale lines keep
+  // their own name/price snapshots, so receipts and reports stay intact.
+  delete: adminQuery
+    .input(z.object({ id: z.number().int() }))
+    .mutation(({ input }) => {
+      const db = getDb();
+      const target = db
+        .select()
+        .from(products)
+        .where(eq(products.id, input.id))
+        .get();
+      if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+      db.transaction((t) => {
+        t.delete(stocks).where(eq(stocks.productId, input.id)).run();
+        t.delete(products).where(eq(products.id, input.id)).run();
+      });
       return { ok: true };
     }),
 

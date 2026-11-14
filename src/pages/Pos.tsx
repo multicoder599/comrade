@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,10 +14,22 @@ import { useAuth } from "@/lib/auth";
 import { usePortGuard } from "@/lib/ports";
 import { trpc } from "@/providers/trpc";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
+import { paymentLabel } from "@/lib/labels";
 import { useCartTabs } from "@/components/pos/useCartTabs";
-import { cartTotal, MAX_TABS, type CatalogProduct } from "@/components/pos/types";
-import { CheckoutDialog, type CompletedSale } from "@/components/pos/CheckoutDialog";
+import {
+  cartTotal,
+  lineTotal,
+  MAX_TABS,
+  type CartLine,
+  type CartTab,
+  type CatalogProduct,
+} from "@/components/pos/types";
+import {
+  CheckoutDialog,
+  type CompletedSale,
+} from "@/components/pos/CheckoutDialog";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
+import { DebtsSheet } from "@/components/pos/DebtsSheet";
 import {
   Search,
   Plus,
@@ -27,7 +39,10 @@ import {
   ReceiptText,
   Trash2,
   Tag,
-  ShoppingCart,
+  ScanBarcode,
+  Loader2,
+  Smartphone,
+  Wallet,
 } from "lucide-react";
 
 export default function Pos() {
@@ -48,7 +63,13 @@ export default function Pos() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [receiptSaleId, setReceiptSaleId] = useState<number | null>(null);
   const [recentOpen, setRecentOpen] = useState(false);
-  const [mobileCartOpen, setMobileCartOpen] = useState(false);
+  const [debtsOpen, setDebtsOpen] = useState(false);
+  const [scanText, setScanText] = useState("");
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
+  const scanInputRef = useRef<HTMLInputElement>(null);
+  const refreshPayment = trpc.sales.refreshPayment.useMutation();
+  const cancelSale = trpc.sales.cancel.useMutation();
+  const utils = trpc.useUtils();
 
   const catalog = useMemo(
     () => (catalogQuery.data ?? []) as CatalogProduct[],
@@ -65,9 +86,66 @@ export default function Pos() {
         (!category || p.category === category) &&
         (!term ||
           p.name.toLowerCase().includes(term) ||
-          p.sku.toLowerCase().includes(term)),
+          p.sku.toLowerCase().includes(term) ||
+          (p.barcode ?? "").toLowerCase().includes(term)),
     );
   }, [catalog, search, category]);
+
+  // Background watcher: pending M-Pesa carts keep polling while the cashier
+  // serves other customers. On completion the receipt pops up automatically.
+  const pendingKey = cart.tabs
+    .filter((t) => t.pending)
+    .map((t) => `${t.id}:${t.pending!.saleId}`)
+    .join(",");
+  const pollAttempts = useRef<Record<string, number>>({});
+  useEffect(() => {
+    const pendingTabs = cart.tabs.filter((t) => t.pending);
+    if (pendingTabs.length === 0) return;
+    let cancelled = false;
+
+    async function poll(tab: CartTab) {
+      const pending = tab.pending!;
+      try {
+        const sale = await refreshPayment.mutateAsync({ saleId: pending.saleId });
+        if (cancelled) return;
+        if (sale.status === "completed") {
+          pollAttempts.current[tab.id] = 0;
+          cart.clearTab(tab.id);
+          setReceiptSaleId(sale.id);
+          utils.products.listForShop.invalidate();
+        } else if (sale.status === "failed") {
+          pollAttempts.current[tab.id] = 0;
+          cart.setPending(tab.id, null);
+          cart.setNotice(
+            tab.id,
+            "M-Pesa payment failed or was cancelled — stock restored. Check out again to retry.",
+          );
+        } else {
+          const attempts = (pollAttempts.current[tab.id] ?? 0) + 1;
+          pollAttempts.current[tab.id] = attempts;
+          if (attempts > 45) {
+            pollAttempts.current[tab.id] = 0;
+            cart.setPending(tab.id, null);
+            cart.setNotice(
+              tab.id,
+              "Stopped waiting for that M-Pesa prompt. Check Recent sales for its final status.",
+            );
+          }
+        }
+      } catch {
+        /* transient network error — try again on the next tick */
+      }
+    }
+
+    const iv = setInterval(() => {
+      for (const tab of pendingTabs) void poll(tab);
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKey]);
 
   if (!user || user.role !== "cashier" || !shop) {
     return (
@@ -85,11 +163,38 @@ export default function Pos() {
   const shopName = shop === "A"
     ? settingsQuery.data?.shopAName ?? "Shop A"
     : settingsQuery.data?.shopBName ?? "Shop B";
-  const totals = cartTotal(cart.active);
+
+  function flashScanNotice(message: string) {
+    setScanNotice(message);
+    setTimeout(() => setScanNotice(null), 3500);
+  }
+
+  function onScanKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "Enter") return;
+    const code = scanText.trim();
+    if (!code) return;
+    const hit =
+      catalog.find((p) => p.barcode === code) ??
+      catalog.find((p) => p.sku.toLowerCase() === code.toLowerCase());
+    if (!hit) {
+      flashScanNotice(`No product matches "${code}"`);
+    } else if (hit.stockQty <= 0) {
+      flashScanNotice(`"${hit.name}" is out of stock`);
+    } else {
+      cart.addProduct(hit);
+      flashScanNotice(`Added ${hit.name}`);
+    }
+    setScanText("");
+    scanInputRef.current?.focus();
+  }
+
+  function openCheckout(tabId: string) {
+    cart.setActiveId(tabId);
+    setCheckoutOpen(true);
+  }
 
   function completeSale(result: CompletedSale) {
     setCheckoutOpen(false);
-    setMobileCartOpen(false);
     setReceiptSaleId(result.saleId);
     cart.clearActive();
     catalogQuery.refetch();
@@ -115,11 +220,20 @@ export default function Pos() {
           <span className="text-xs text-muted-foreground hidden sm:block">
             {user.displayName}
           </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-border gap-1.5"
+            onClick={() => setDebtsOpen(true)}
+          >
+            <Wallet className="size-4" />
+            <span className="hidden sm:inline">Debts</span>
+          </Button>
           <Sheet open={recentOpen} onOpenChange={setRecentOpen}>
             <SheetTrigger asChild>
               <Button variant="outline" size="sm" className="border-border gap-1.5">
                 <ReceiptText className="size-4" />
-                Recent
+                <span className="hidden sm:inline">Recent</span>
               </Button>
             </SheetTrigger>
             <SheetContent className="bg-card border-border w-full sm:max-w-md overflow-y-auto">
@@ -146,18 +260,43 @@ export default function Pos() {
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0">
-        {/* Product grid */}
-        <section className="relative flex-1 flex flex-col min-w-0 border-r border-border">
+      <div className="flex-1 flex flex-col md:flex-row min-h-0">
+        {/* Products + scanner */}
+        <section className="relative flex-1 flex flex-col min-w-0 min-h-0">
           <div className="p-3 space-y-2.5 border-b border-border shrink-0">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+              <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-primary" />
               <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search product or SKU…"
-                className="pl-9 bg-card border-input h-10"
+                ref={scanInputRef}
+                value={scanText}
+                onChange={(e) => setScanText(e.target.value)}
+                onKeyDown={onScanKeyDown}
+                placeholder="Scan barcode or type SKU, then Enter…"
+                className="pl-9 pr-28 bg-card border-input h-10 font-figures"
+                autoFocus
               />
+              <span
+                className={`absolute right-3 top-1/2 -translate-y-1/2 text-[11px] ${
+                  scanNotice
+                    ? scanNotice.startsWith("Added")
+                      ? "text-success"
+                      : "text-warning"
+                    : "text-muted-foreground"
+                }`}
+              >
+                {scanNotice ?? "Scanner ready"}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search product…"
+                  className="pl-9 bg-card border-input h-9 text-sm"
+                />
+              </div>
             </div>
             <div className="flex gap-1.5 overflow-x-auto pb-0.5">
               <FilterChip
@@ -185,8 +324,6 @@ export default function Pos() {
             ) : (
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
                 {visible.map((p) => {
-                  const price =
-                    cart.active.mode === "retail" ? p.retailPrice : p.wholesalePrice;
                   const out = p.stockQty <= 0;
                   return (
                     <button
@@ -205,7 +342,7 @@ export default function Pos() {
                       </p>
                       <div className="mt-2 flex items-baseline justify-between gap-1">
                         <span className="font-figures font-semibold text-primary">
-                          {formatKes(price)}
+                          {formatKes(p.retailPrice)}
                         </span>
                         <span
                           className={`text-[11px] ${
@@ -215,194 +352,97 @@ export default function Pos() {
                           {out ? "Out of stock" : `${formatQty(p.stockQty)} ${p.unit}`}
                         </span>
                       </div>
+                      {p.wholesalePrice > 0 && p.wholesalePrice !== p.retailPrice && (
+                        <p className="mt-1 text-[10px] font-figures text-warning">
+                          W {formatKes(p.wholesalePrice)}
+                        </p>
+                      )}
                     </button>
                   );
                 })}
               </div>
             )}
           </div>
-
-          {/* Mobile cart toggle */}
-          {!mobileCartOpen && (
-            <button
-              type="button"
-              onClick={() => setMobileCartOpen(true)}
-              className="md:hidden absolute bottom-4 right-4 z-30 flex items-center gap-2.5 rounded-full bg-primary text-primary-foreground pl-4 pr-5 py-3 font-display font-semibold cursor-pointer"
-            >
-              <ShoppingCart className="size-5" />
-              <span className="font-figures text-sm">
-                {formatQty(totals.items)} items
-              </span>
-              <span className="font-figures">{formatKes(totals.total)}</span>
-            </button>
-          )}
         </section>
 
-        {/* Cart */}
-        <section
-          className={`${
-            mobileCartOpen ? "fixed inset-0 z-40 flex" : "hidden"
-          } md:static md:z-auto md:flex md:w-[380px] lg:w-[420px] flex-col shrink-0 bg-background md:bg-card/40`}
-        >
-          {/* Tabs */}
-          <div className="flex items-center gap-1 px-2 pt-2 shrink-0">
-            {cart.tabs.map((tab) => {
-              const t = cartTotal(tab);
-              const isActive = tab.id === cart.active.id;
-              return (
-                <div
-                  key={tab.id}
-                  className={`group flex items-center gap-1 rounded-t-md px-3 py-2 text-sm cursor-pointer border border-b-0 transition-colors ${
-                    isActive
-                      ? "bg-card border-border text-foreground"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => cart.setActiveId(tab.id)}
-                >
-                  <span className="font-medium">{tab.label}</span>
-                  {t.items > 0 && (
-                    <span className="font-figures text-[11px] text-primary">
-                      {formatPlain(t.total)}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    aria-label={`Close ${tab.label}`}
-                    className="ml-1 opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      cart.closeTab(tab.id);
-                    }}
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </div>
-              );
-            })}
+        {/* Parallel carts */}
+        <section className="shrink-0 h-[46dvh] md:h-auto border-t md:border-t-0 md:border-l border-border flex flex-col bg-card/40">
+          <div className="flex-1 flex gap-2.5 overflow-x-auto snap-x snap-mandatory p-2.5 min-h-0">
+            {cart.tabs.map((tab) => (
+              <CartColumn
+                key={tab.id}
+                tab={tab}
+                isActive={tab.id === cart.active.id}
+                catalog={catalog}
+                onFocus={() => cart.setActiveId(tab.id)}
+                onClose={() => cart.closeTab(tab.id)}
+                onQty={(key, qty) => cart.updateLine(key, { qty })}
+                onPrice={(key, unitPrice) => cart.updateLine(key, { unitPrice })}
+                onPriceType={(key, pt) => cart.setLinePriceType(key, pt, catalog)}
+                onRemoveLine={(key) => cart.removeLine(key)}
+                onDiscount={(discount) =>
+                  cart.updateTab(tab.id, (t) => ({
+                    ...t,
+                    discount: Math.min(discount, cartTotal(t).subtotal),
+                  }))
+                }
+                onClear={() => cart.clearTab(tab.id)}
+                onCheckout={() => openCheckout(tab.id)}
+                onCheckPayment={async () => {
+                  if (!tab.pending) return;
+                  try {
+                    const sale = await refreshPayment.mutateAsync({
+                      saleId: tab.pending.saleId,
+                    });
+                    if (sale.status === "completed") {
+                      cart.clearTab(tab.id);
+                      setReceiptSaleId(sale.id);
+                      utils.products.listForShop.invalidate();
+                    } else if (sale.status === "failed") {
+                      cart.setPending(tab.id, null);
+                      cart.setNotice(
+                        tab.id,
+                        "M-Pesa payment failed or was cancelled — stock restored.",
+                      );
+                    } else {
+                      cart.setNotice(tab.id, "Still waiting for the customer's PIN…");
+                    }
+                  } catch {
+                    cart.setNotice(tab.id, "Could not reach the server — try again.");
+                  }
+                }}
+                onCancelPending={() => {
+                  if (!tab.pending) return;
+                  if (
+                    window.confirm(
+                      `Cancel the pending M-Pesa sale ${tab.pending.receiptNo}? Stock will be restored.`,
+                    )
+                  ) {
+                    cancelSale.mutate(
+                      { saleId: tab.pending.saleId },
+                      {
+                        onSuccess: () => {
+                          cart.setPending(tab.id, null);
+                          cart.setNotice(tab.id, "Pending sale cancelled.");
+                          utils.products.listForShop.invalidate();
+                        },
+                      },
+                    );
+                  }
+                }}
+                onDismissNotice={() => cart.setNotice(tab.id, null)}
+              />
+            ))}
             {cart.tabs.length < MAX_TABS && (
               <button
                 type="button"
                 onClick={cart.addTab}
-                aria-label="New sale tab"
-                className="flex items-center gap-1 rounded-md px-2.5 py-2 text-sm text-muted-foreground hover:text-primary transition-colors cursor-pointer"
+                className="shrink-0 w-16 md:w-20 rounded-lg border border-dashed border-border flex flex-col items-center justify-center gap-1.5 text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors cursor-pointer snap-start"
               >
-                <Plus className="size-4" />
+                <Plus className="size-5" />
+                <span className="text-[11px] font-medium">New sale</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => setMobileCartOpen(false)}
-              className="ml-auto md:hidden flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-            >
-              <X className="size-4" />
-              Done
-            </button>
-          </div>
-
-          {/* Mode + customer */}
-          <div className="border-t border-border px-3 py-2.5 space-y-2 shrink-0 bg-card">
-            <div className="grid grid-cols-2 gap-1 rounded-md bg-secondary p-1">
-              {(["retail", "wholesale"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => cart.switchMode(mode, catalog)}
-                  className={`rounded px-2 py-1.5 text-sm font-medium capitalize transition-colors cursor-pointer ${
-                    cart.active.mode === mode
-                      ? mode === "wholesale"
-                        ? "bg-warning text-warning-foreground"
-                        : "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-            <Input
-              value={cart.active.customerName}
-              onChange={(e) =>
-                cart.updateTab(cart.active.id, (t) => ({
-                  ...t,
-                  customerName: e.target.value,
-                }))
-              }
-              placeholder="Customer name (optional)"
-              className="bg-background border-input h-9 text-sm"
-            />
-          </div>
-
-          {/* Lines */}
-          <div className="flex-1 overflow-y-auto border-t border-border bg-card">
-            {cart.active.lines.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground p-6">
-                <Tag className="size-6" strokeWidth={1.5} />
-                <p className="text-sm">Tap products to add them to {cart.active.label}</p>
-              </div>
-            ) : (
-              <ul className="divide-y divide-border">
-                {cart.active.lines.map((line) => (
-                  <CartLineRow
-                    key={line.productId}
-                    line={line}
-                    onQty={(qty) => cart.updateLine(line.productId, { qty })}
-                    onPrice={(unitPrice) =>
-                      cart.updateLine(line.productId, { unitPrice })
-                    }
-                    onRemove={() => cart.removeLine(line.productId)}
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {/* Totals + checkout */}
-          <div className="border-t border-border p-3 space-y-2.5 shrink-0 bg-card">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Discount (KES)</span>
-              <Input
-                className="w-28 h-8 bg-background border-input font-figures text-right"
-                inputMode="decimal"
-                placeholder="0"
-                value={
-                  cart.active.discount === 0
-                    ? ""
-                    : formatPlain(cart.active.discount)
-                }
-                onChange={(e) => {
-                  const cents = parseKes(e.target.value) ?? 0;
-                  cart.updateTab(cart.active.id, (t) => ({
-                    ...t,
-                    discount: Math.min(cents, cartTotal(t).subtotal),
-                  }));
-                }}
-              />
-            </div>
-            <div className="flex items-baseline justify-between">
-              <span className="micro-label">
-                Total · {formatQty(totals.items)} items
-              </span>
-              <span className="font-figures text-3xl font-semibold tracking-tight">
-                {formatKes(totals.total)}
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                className="border-border text-muted-foreground"
-                disabled={cart.active.lines.length === 0}
-                onClick={cart.clearActive}
-              >
-                <Trash2 className="size-4" />
-              </Button>
-              <Button
-                className="flex-1 h-12 bg-primary text-primary-foreground hover:bg-primary/90 font-display font-semibold text-base"
-                disabled={cart.active.lines.length === 0}
-                onClick={() => setCheckoutOpen(true)}
-              >
-                Charge {formatKes(totals.total)}
-              </Button>
-            </div>
           </div>
         </section>
       </div>
@@ -414,12 +454,24 @@ export default function Pos() {
         shop={shop}
         megapayEnabled={shop === "A" && (settingsQuery.data?.megapayConfigured ?? false)}
         onCompleted={completeSale}
+        onPending={(pending) => {
+          cart.setPending(cart.active.id, pending);
+          setCheckoutOpen(false);
+          catalogQuery.refetch();
+        }}
       />
       <ReceiptDialog
         saleId={receiptSaleId}
         open={receiptSaleId !== null}
         onOpenChange={(open) => !open && setReceiptSaleId(null)}
         businessName={settingsQuery.data?.businessName ?? "Comrade Shop"}
+      />
+      <DebtsSheet
+        open={debtsOpen}
+        onOpenChange={setDebtsOpen}
+        onReceipt={(saleId) => {
+          setReceiptSaleId(saleId);
+        }}
       />
     </div>
   );
@@ -449,68 +501,299 @@ function FilterChip({
   );
 }
 
+type CartColumnProps = {
+  tab: CartTab;
+  isActive: boolean;
+  catalog: CatalogProduct[];
+  onFocus: () => void;
+  onClose: () => void;
+  onQty: (key: string, qty: number) => void;
+  onPrice: (key: string, unitPrice: number) => void;
+  onPriceType: (key: string, priceType: "retail" | "wholesale") => void;
+  onRemoveLine: (key: string) => void;
+  onDiscount: (discount: number) => void;
+  onClear: () => void;
+  onCheckout: () => void;
+  onCheckPayment: () => void;
+  onCancelPending: () => void;
+  onDismissNotice: () => void;
+};
+
+function CartColumn({
+  tab,
+  isActive,
+  catalog,
+  onFocus,
+  onClose,
+  onQty,
+  onPrice,
+  onPriceType,
+  onRemoveLine,
+  onDiscount,
+  onClear,
+  onCheckout,
+  onCheckPayment,
+  onCancelPending,
+  onDismissNotice,
+}: CartColumnProps) {
+  const totals = cartTotal(tab);
+  const pending = tab.pending;
+
+  return (
+    <div
+      onClick={onFocus}
+      className={`shrink-0 w-[84vw] max-w-[340px] md:w-[300px] snap-center rounded-lg border flex flex-col min-h-0 overflow-hidden transition-colors ${
+        isActive
+          ? "border-primary/60 bg-card shadow-[0_0_0_1px_hsl(var(--primary)/0.35)]"
+          : "border-border bg-card"
+      }`}
+    >
+      {/* Column header */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+        <span className="font-display font-semibold text-sm">{tab.label}</span>
+        {isActive && (
+          <Badge className="bg-primary text-primary-foreground text-[9px] uppercase tracking-wide px-1.5 py-0">
+            Active
+          </Badge>
+        )}
+        {pending && (
+          <Badge
+            variant="outline"
+            className="border-warning/60 text-warning text-[9px] uppercase tracking-wide px-1.5 py-0"
+          >
+            M-Pesa…
+          </Badge>
+        )}
+        <button
+          type="button"
+          aria-label={`Close ${tab.label}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className="ml-auto text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      {tab.notice && (
+        <div className="flex items-start gap-2 px-3 py-2 bg-warning/10 border-b border-warning/30 text-warning text-xs shrink-0">
+          <span className="flex-1">{tab.notice}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDismissNotice();
+            }}
+            className="cursor-pointer"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
+      {pending ? (
+        /* Waiting for the customer's M-Pesa PIN — other carts stay usable */
+        <div className="flex-1 flex flex-col items-center justify-center gap-2.5 p-4 text-center">
+          <Loader2 className="size-7 animate-spin text-primary" />
+          <p className="text-sm font-medium">Waiting for M-Pesa PIN…</p>
+          <p className="text-xs text-muted-foreground">
+            <Smartphone className="inline size-3.5 mr-1 -mt-0.5" />
+            {pending.phone}
+            {pending.method === "split" ? " · split sale" : ""}
+          </p>
+          <p className="font-figures font-semibold">{formatKes(pending.total)}</p>
+          <p className="text-[11px] text-muted-foreground">{pending.receiptNo}</p>
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-border"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCheckPayment();
+              }}
+            >
+              Check now
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCancelPending();
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Lines */}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {tab.lines.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground p-4">
+                <Tag className="size-5" strokeWidth={1.5} />
+                <p className="text-xs text-center">
+                  Tap products to add them to {tab.label}
+                </p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {tab.lines.map((line) => (
+                  <CartLineRow
+                    key={line.key}
+                    line={line}
+                    onQty={(qty) => onQty(line.key, qty)}
+                    onPrice={(unitPrice) => onPrice(line.key, unitPrice)}
+                    onPriceType={(pt) => onPriceType(line.key, pt)}
+                    onRemove={() => onRemoveLine(line.key)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Totals + checkout */}
+          <div className="border-t border-border p-2.5 space-y-2 shrink-0 bg-card">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-muted-foreground">Discount</span>
+              <Input
+                className="w-20 h-7 bg-background border-input font-figures text-right text-xs"
+                inputMode="decimal"
+                placeholder="0"
+                value={tab.discount === 0 ? "" : formatPlain(tab.discount)}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => onDiscount(parseKes(e.target.value) ?? 0)}
+              />
+            </div>
+            <div className="flex items-baseline justify-between">
+              <span className="micro-label">
+                Total · {formatQty(totals.items)} items
+              </span>
+              <span className="font-figures text-xl font-semibold tracking-tight">
+                {formatKes(totals.total)}
+              </span>
+            </div>
+            <div className="flex gap-1.5">
+              <Button
+                variant="outline"
+                size="icon"
+                className="border-border text-muted-foreground shrink-0"
+                disabled={tab.lines.length === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClear();
+                }}
+                aria-label="Clear cart"
+              >
+                <Trash2 className="size-4" />
+              </Button>
+              <Button
+                className="flex-1 h-10 bg-primary text-primary-foreground hover:bg-primary/90 font-display font-semibold"
+                disabled={tab.lines.length === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCheckout();
+                }}
+              >
+                Checkout {totals.total > 0 ? formatKes(totals.total) : ""}
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function CartLineRow({
   line,
   onQty,
   onPrice,
+  onPriceType,
   onRemove,
 }: {
-  line: {
-    productId: number;
-    name: string;
-    unit: string;
-    qty: number;
-    unitPrice: number;
-    listPrice: number;
-    allowBargain: boolean;
-  };
+  line: CartLine;
   onQty: (qty: number) => void;
   onPrice: (price: number) => void;
+  onPriceType: (priceType: "retail" | "wholesale") => void;
   onRemove: () => void;
 }) {
   const [priceText, setPriceText] = useState<string | null>(null);
   const bargained = line.unitPrice !== line.listPrice;
 
   return (
-    <li className="px-3 py-2.5 space-y-1.5">
+    <li className="px-2.5 py-2 space-y-1.5">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-medium leading-snug">{line.name}</p>
+        <p className="text-[13px] font-medium leading-snug min-w-0">
+          {line.name}
+        </p>
         <button
           type="button"
           aria-label="Remove line"
-          onClick={onRemove}
-          className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer shrink-0"
         >
-          <X className="size-4" />
+          <X className="size-3.5" />
         </button>
       </div>
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
+      <div className="flex items-center justify-between gap-1.5">
+        <div className="flex items-center gap-0.5">
           <QtyButton
             aria-label="Decrease quantity"
             onClick={() => onQty(Math.max(1, line.qty - 1))}
-            icon={<Minus className="size-3.5" />}
+            icon={<Minus className="size-3" />}
           />
-          <span className="w-10 text-center font-figures text-sm">
+          <span className="w-7 text-center font-figures text-xs">
             {formatQty(line.qty)}
           </span>
           <QtyButton
             aria-label="Increase quantity"
             onClick={() => onQty(line.qty + 1)}
-            icon={<Plus className="size-3.5" />}
+            icon={<Plus className="size-3" />}
           />
-          <span className="text-[11px] text-muted-foreground ml-1">{line.unit}</span>
         </div>
-        <div className="flex items-center gap-2">
+        {/* Retail / wholesale pick for this line */}
+        <div className="flex rounded border border-border overflow-hidden shrink-0">
+          {(["retail", "wholesale"] as const).map((pt) => (
+            <button
+              key={pt}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPriceType(pt);
+              }}
+              className={`px-1.5 py-0.5 text-[10px] font-semibold uppercase cursor-pointer transition-colors ${
+                line.priceType === pt
+                  ? pt === "wholesale"
+                    ? "bg-warning text-warning-foreground"
+                    : "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {pt === "retail" ? "R" : "W"}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5">
           {line.allowBargain ? (
             <div className="relative">
               <Input
                 aria-label={`Price for ${line.name}`}
-                className={`w-24 h-8 font-figures text-right text-sm bg-background ${
+                className={`w-16 h-7 font-figures text-right text-xs bg-background ${
                   bargained ? "border-warning text-warning" : "border-input"
                 }`}
                 inputMode="decimal"
                 value={priceText ?? formatPlain(line.unitPrice)}
+                onClick={(e) => e.stopPropagation()}
                 onChange={(e) => {
                   setPriceText(e.target.value);
                   const cents = parseKes(e.target.value);
@@ -519,18 +802,18 @@ function CartLineRow({
                 onBlur={() => setPriceText(null)}
               />
               {bargained && (
-                <span className="absolute -top-4 right-0 text-[10px] text-warning line-through font-figures">
+                <span className="absolute -top-3.5 right-0 text-[9px] text-warning line-through font-figures">
                   {formatPlain(line.listPrice)}
                 </span>
               )}
             </div>
           ) : (
-            <span className="font-figures text-sm text-muted-foreground">
+            <span className="font-figures text-xs text-muted-foreground">
               @{formatPlain(line.unitPrice)}
             </span>
           )}
-          <span className="font-figures font-semibold w-20 text-right">
-            {formatKes(Math.round(line.unitPrice * line.qty))}
+          <span className="font-figures text-[13px] font-semibold w-16 text-right">
+            {formatKes(lineTotal(line))}
           </span>
         </div>
       </div>
@@ -549,8 +832,11 @@ function QtyButton({
   return (
     <button
       type="button"
-      onClick={onClick}
-      className="size-7 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-muted-foreground/50 transition-colors cursor-pointer"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className="size-6 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-muted-foreground/50 transition-colors cursor-pointer"
       {...rest}
     >
       {icon}
@@ -580,8 +866,8 @@ function RecentSales({ onReprint }: { onReprint: (saleId: number) => void }) {
             <p className="text-sm font-medium truncate">{sale.receiptNo}</p>
             <p className="text-xs text-muted-foreground">
               {new Date(sale.createdAt).toLocaleTimeString("en-KE")} ·{" "}
-              {sale.paymentMethod === "megapay" ? "M-Pesa" : "Cash"} ·{" "}
-              {sale.mode}
+              {paymentLabel(sale.paymentMethod)}
+              {sale.customerName ? ` · ${sale.customerName}` : ""}
             </p>
           </div>
           <StatusBadge status={sale.status} />

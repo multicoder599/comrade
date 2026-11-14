@@ -66,7 +66,7 @@ export const reportsRouter = createRouter({
       };
     };
 
-    const byMethod = (method: "cash" | "megapay") => ({
+    const byMethod = (method: "cash" | "megapay" | "split" | "debt") => ({
       method,
       sales: rows.filter((r) => r.paymentMethod === method).length,
       revenue: rows.filter((r) => r.paymentMethod === method).reduce((s, r) => s + r.total, 0),
@@ -92,7 +92,7 @@ export const reportsRouter = createRouter({
       cost,
       profit: revenue - cost,
       shops: [perShop("A"), perShop("B")],
-      payments: [byMethod("cash"), byMethod("megapay")],
+      payments: [byMethod("cash"), byMethod("megapay"), byMethod("split"), byMethod("debt")],
       byDay: [...byDayMap.values()].sort((a, b) => a.day.localeCompare(b.day)),
     };
   }),

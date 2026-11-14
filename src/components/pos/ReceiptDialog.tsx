@@ -56,6 +56,9 @@ export function ReceiptDialog({ saleId, open, onOpenChange, businessName }: Prop
                   <div key={item.id} className="flex justify-between gap-2">
                     <span className="truncate">
                       {item.name}
+                      {item.priceType === "wholesale" && (
+                        <span className="text-warning"> (W)</span>
+                      )}
                       <span className="text-muted-foreground">
                         {" "}
                         ×{formatQty(item.qty)} @ {formatKes(item.unitPrice)}
@@ -80,19 +83,54 @@ export function ReceiptDialog({ saleId, open, onOpenChange, businessName }: Prop
                   <span>TOTAL</span>
                   <span>{formatKes(data.sale.total)}</span>
                 </div>
-                <div className="flex justify-between text-muted-foreground">
-                  <span>
-                    {data.sale.paymentMethod === "megapay"
-                      ? `M-Pesa${data.sale.mpesaReceipt ? ` · ${data.sale.mpesaReceipt}` : ""}`
-                      : "Cash"}
-                  </span>
-                  {data.sale.tendered !== null && (
+                {data.sale.paymentMethod === "split" ? (
+                  <>
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>Cash part</span>
+                      <span>{formatKes(data.sale.cashAmount ?? 0)}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>
+                        M-Pesa part
+                        {data.sale.mpesaReceipt ? ` · ${data.sale.mpesaReceipt}` : ""}
+                      </span>
+                      <span>{formatKes(data.sale.mpesaAmount ?? 0)}</span>
+                    </div>
+                    {data.sale.tendered !== null && (
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Cash received</span>
+                        <span>
+                          {formatKes(data.sale.tendered)} · change{" "}
+                          {formatKes(data.sale.change ?? 0)}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : data.sale.paymentMethod === "debt" ? (
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>DEBT — pay later</span>
                     <span>
-                      {formatKes(data.sale.tendered)} · change{" "}
-                      {formatKes(data.sale.change ?? 0)}
+                      {data.sale.customerName ?? ""}
+                      {data.sale.customerPhone
+                        ? ` · ${data.sale.customerPhone}`
+                        : ""}
                     </span>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>
+                      {data.sale.paymentMethod === "megapay"
+                        ? `M-Pesa${data.sale.mpesaReceipt ? ` · ${data.sale.mpesaReceipt}` : ""}`
+                        : "Cash"}
+                    </span>
+                    {data.sale.tendered !== null && (
+                      <span>
+                        {formatKes(data.sale.tendered)} · change{" "}
+                        {formatKes(data.sale.change ?? 0)}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <p className="text-center text-muted-foreground pt-2 border-t border-dashed border-border">
                 Asante! Karibu tena.

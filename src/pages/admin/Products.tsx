@@ -21,11 +21,12 @@ import {
 import { trpc } from "@/providers/trpc";
 import { errorMessage } from "@/lib/auth";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
-import { Plus, Pencil, Search } from "lucide-react";
+import { Plus, Pencil, Search, Trash2 } from "lucide-react";
 
 type ProductRow = {
   id: number;
   sku: string;
+  barcode: string | null;
   name: string;
   category: string;
   unit: string;
@@ -33,6 +34,7 @@ type ProductRow = {
   retailPrice: number;
   wholesalePrice: number;
   wholesaleMinQty: number;
+  lastSoldPrice: number | null;
   allowBargain: boolean;
   active: boolean;
   stockA: number;
@@ -41,6 +43,7 @@ type ProductRow = {
 
 type FormState = {
   sku: string;
+  barcode: string;
   name: string;
   category: string;
   unit: string;
@@ -53,6 +56,7 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   sku: "",
+  barcode: "",
   name: "",
   category: "General",
   unit: "pc",
@@ -88,6 +92,19 @@ export default function Products() {
     },
     onError: (e) => setError(errorMessage(e)),
   });
+  const remove = trpc.products.delete.useMutation({
+    onSuccess: () => listQuery.refetch(),
+  });
+
+  function deleteProduct(p: ProductRow) {
+    if (
+      window.confirm(
+        `Delete "${p.name}" permanently? Its stock records are removed too. Past receipts keep their own copy of the sale.`,
+      )
+    ) {
+      remove.mutate({ id: p.id });
+    }
+  }
 
   const rows = useMemo(
     () => (listQuery.data ?? []) as ProductRow[],
@@ -105,6 +122,7 @@ export default function Products() {
     setEditing(p);
     setForm({
       sku: p.sku,
+      barcode: p.barcode ?? "",
       name: p.name,
       category: p.category,
       unit: p.unit,
@@ -132,6 +150,7 @@ export default function Products() {
     }
     const payload = {
       sku: form.sku.trim(),
+      barcode: form.barcode.trim() || undefined,
       name: form.name.trim(),
       category: form.category.trim() || "General",
       unit: form.unit.trim() || "pc",
@@ -174,7 +193,7 @@ export default function Products() {
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search name or SKU…"
+          placeholder="Search name, SKU or barcode…"
           className="pl-9 bg-card border-input"
         />
       </div>
@@ -187,6 +206,7 @@ export default function Products() {
               <TableHead className="text-right">Buying</TableHead>
               <TableHead className="text-right">Retail</TableHead>
               <TableHead className="text-right">Wholesale</TableHead>
+              <TableHead className="text-right">Last sold</TableHead>
               <TableHead className="text-right">Margin</TableHead>
               <TableHead className="text-center">Bargain</TableHead>
               <TableHead className="text-right">Stock A</TableHead>
@@ -203,7 +223,9 @@ export default function Products() {
                   <TableCell>
                     <p className="font-medium">{p.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {p.sku} · {p.category} · per {p.unit}
+                      {p.sku}
+                      {p.barcode ? ` · ⌗${p.barcode}` : ""} · {p.category} · per{" "}
+                      {p.unit}
                     </p>
                   </TableCell>
                   <TableCell className="text-right font-figures text-muted-foreground">
@@ -217,6 +239,20 @@ export default function Products() {
                     <span className="block text-[10px] text-muted-foreground">
                       min {formatQty(p.wholesaleMinQty)}
                     </span>
+                  </TableCell>
+                  <TableCell className="text-right font-figures">
+                    {p.lastSoldPrice !== null ? (
+                      <>
+                        {formatKes(p.lastSoldPrice)}
+                        {p.lastSoldPrice !== p.retailPrice && (
+                          <span className="block text-[10px] text-warning">
+                            bargained
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell
                     className={`text-right font-figures ${margin >= 0 ? "text-primary" : "text-destructive"}`}
@@ -246,21 +282,32 @@ export default function Products() {
                     />
                   </TableCell>
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openEdit(p)}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <Pencil className="size-4" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openEdit(p)}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <Pencil className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => deleteProduct(p)}
+                        disabled={remove.isPending}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               );
             })}
             {rows.length === 0 && (
               <TableRow className="border-border">
-                <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
+                <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
                   No products found.
                 </TableCell>
               </TableRow>
@@ -287,6 +334,15 @@ export default function Products() {
                 onChange={(e) => setForm({ ...form, sku: e.target.value })}
                 className="bg-background border-input"
                 placeholder="e.g. SUGAR1KG"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Barcode (optional)</Label>
+              <Input
+                value={form.barcode}
+                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                className="bg-background border-input font-figures"
+                placeholder="Scan or type it"
               />
             </div>
             <div className="space-y-1.5">

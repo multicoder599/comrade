@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -12,18 +12,21 @@ import { Label } from "@/components/ui/label";
 import { trpc } from "@/providers/trpc";
 import { errorMessage } from "@/lib/auth";
 import { formatKes, formatPlain, parseKes } from "@/lib/money";
-import type { CartTab } from "./types";
+import type { CartTab, PendingPayment } from "./types";
 import { cartTotal } from "./types";
-import { Banknote, Smartphone, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import {
+  Banknote,
+  Smartphone,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Split,
+  BookUser,
+} from "lucide-react";
 
 export type CompletedSale = {
   saleId: number;
   receiptNo: string;
-  total: number;
-  tendered: number | null;
-  change: number | null;
-  paymentMethod: "cash" | "megapay";
-  mpesaReceipt: string | null;
 };
 
 type Props = {
@@ -33,13 +36,16 @@ type Props = {
   shop: "A" | "B";
   megapayEnabled: boolean;
   onCompleted: (result: CompletedSale) => void;
+  /** M-Pesa STK push sent — the cart keeps waiting in the background. */
+  onPending: (pending: PendingPayment) => void;
 };
 
 type Phase =
   | { step: "choose" }
   | { step: "cash" }
-  | { step: "mpesa-phone" }
-  | { step: "mpesa-waiting"; saleId: number; message: string }
+  | { step: "mpesa" }
+  | { step: "split" }
+  | { step: "debt" }
   | { step: "error"; message: string };
 
 export function CheckoutDialog({
@@ -49,16 +55,18 @@ export function CheckoutDialog({
   shop,
   megapayEnabled,
   onCompleted,
+  onPending,
 }: Props) {
   const { total } = cartTotal(tab);
   const [phase, setPhase] = useState<Phase>({ step: "choose" });
   const [tenderedText, setTenderedText] = useState("");
   const [phone, setPhone] = useState("");
+  const [cashPartText, setCashPartText] = useState("");
+  const [debtName, setDebtName] = useState("");
+  const [debtPhone, setDebtPhone] = useState("");
   const [busy, setBusy] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const checkout = trpc.sales.checkout.useMutation();
-  const refreshPayment = trpc.sales.refreshPayment.useMutation();
   const utils = trpc.useUtils();
 
   useEffect(() => {
@@ -66,103 +74,44 @@ export function CheckoutDialog({
       setPhase({ step: "choose" });
       setTenderedText("");
       setPhone("");
+      setCashPartText("");
+      setDebtName("");
+      setDebtPhone("");
       setBusy(false);
     }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
   }, [open]);
 
-  async function payCash() {
-    const tendered = parseKes(tenderedText) ?? total;
-    setBusy(true);
-    try {
-      const result = await checkout.mutateAsync({
-        mode: tab.mode,
-        paymentMethod: "cash",
-        lines: tab.lines.map((l) => ({
-          productId: l.productId,
-          qty: l.qty,
-          unitPrice: l.unitPrice,
-        })),
-        discount: tab.discount,
-        tendered,
-        customerName: tab.customerName || undefined,
-      });
-      await utils.products.listForShop.invalidate();
-      onCompleted({
-        saleId: result.sale.id,
-        receiptNo: result.sale.receiptNo,
-        total: result.sale.total,
-        tendered: result.sale.tendered,
-        change: result.sale.change,
-        paymentMethod: "cash",
-        mpesaReceipt: null,
-      });
-    } catch (err) {
-      setPhase({ step: "error", message: errorMessage(err) });
-    } finally {
-      setBusy(false);
-    }
-  }
+  const linesPayload = () =>
+    tab.lines.map((l) => ({
+      productId: l.productId,
+      qty: l.qty,
+      priceType: l.priceType,
+      unitPrice: l.unitPrice,
+    }));
 
-  async function payMpesa() {
+  async function runCheckout(
+    input: Parameters<typeof checkout.mutateAsync>[0],
+  ): Promise<void> {
     setBusy(true);
     try {
-      const result = await checkout.mutateAsync({
-        mode: tab.mode,
-        paymentMethod: "megapay",
-        lines: tab.lines.map((l) => ({
-          productId: l.productId,
-          qty: l.qty,
-          unitPrice: l.unitPrice,
-        })),
-        discount: tab.discount,
-        customerName: tab.customerName || undefined,
-        customerPhone: phone,
-      });
-      const saleId = result.sale.id;
-      setPhase({
-        step: "mpesa-waiting",
-        saleId,
-        message: result.stkMessage ?? "STK push sent",
-      });
-      // Poll MegaPay until the customer accepts or cancels the prompt.
-      let attempts = 0;
-      pollRef.current = setInterval(async () => {
-        attempts += 1;
-        try {
-          const sale = await refreshPayment.mutateAsync({ saleId });
-          if (sale.status === "completed") {
-            if (pollRef.current) clearInterval(pollRef.current);
-            await utils.products.listForShop.invalidate();
-            onCompleted({
-              saleId: sale.id,
-              receiptNo: sale.receiptNo,
-              total: sale.total,
-              tendered: null,
-              change: null,
-              paymentMethod: "megapay",
-              mpesaReceipt: sale.mpesaReceipt,
-            });
-          } else if (sale.status === "failed") {
-            if (pollRef.current) clearInterval(pollRef.current);
-            setPhase({
-              step: "error",
-              message: "Payment was cancelled or failed. Stock has been restored.",
-            });
-          } else if (attempts > 40) {
-            if (pollRef.current) clearInterval(pollRef.current);
-            setPhase({
-              step: "error",
-              message:
-                "Timed out waiting for the customer. Check Recent Sales to confirm the final status.",
-            });
-          }
-        } catch {
-          /* keep polling through transient errors */
-        }
-      }, 3000);
+      const result = await checkout.mutateAsync(input);
+      await utils.products.listForShop.invalidate();
+      if (result.sale.status === "pending") {
+        // M-Pesa prompt is on the customer's phone — free up the till and let
+        // the cart wait in the background while the cashier serves others.
+        onPending({
+          saleId: result.sale.id,
+          receiptNo: result.sale.receiptNo,
+          method: input.paymentMethod === "split" ? "split" : "megapay",
+          total: result.sale.total,
+          phone: input.customerPhone ?? "",
+        });
+      } else {
+        onCompleted({
+          saleId: result.sale.id,
+          receiptNo: result.sale.receiptNo,
+        });
+      }
     } catch (err) {
       setPhase({ step: "error", message: errorMessage(err) });
     } finally {
@@ -173,11 +122,26 @@ export function CheckoutDialog({
   const tendered = parseKes(tenderedText);
   const change = tendered !== null ? tendered - total : null;
 
+  const cashPart = parseKes(cashPartText);
+  const splitMpesa = cashPart !== null ? total - cashPart : null;
+  const splitTendered = parseKes(tenderedText);
+  const splitChange =
+    splitTendered !== null && cashPart !== null
+      ? splitTendered - cashPart
+      : null;
+
+  const phoneValid = phone.replace(/\D/g, "").length >= 9;
+  const debtPhoneValid = debtPhone.replace(/\D/g, "").length >= 9;
+
+  const mpesaNote = megapayEnabled
+    ? "Send STK push to the customer's phone"
+    : "Set MEGAPAY_API_KEY on the server first";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-card border-border sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="font-display">Checkout</DialogTitle>
+          <DialogTitle className="font-display">Checkout — {tab.label}</DialogTitle>
           <DialogDescription className="sr-only">
             Take payment for the current sale
           </DialogDescription>
@@ -191,13 +155,13 @@ export function CheckoutDialog({
         </div>
 
         {phase.step === "choose" && (
-          <div className="grid gap-3">
+          <div className="grid gap-2.5">
             <Button
               variant="outline"
-              className="h-14 justify-start gap-3 border-border hover:bg-secondary"
+              className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
               onClick={() => setPhase({ step: "cash" })}
             >
-              <Banknote className="size-5 text-primary" />
+              <Banknote className="size-5 text-primary shrink-0" />
               <span className="text-left">
                 <span className="block font-semibold">Cash</span>
                 <span className="block text-xs text-muted-foreground">
@@ -205,31 +169,56 @@ export function CheckoutDialog({
                 </span>
               </span>
             </Button>
-            {shop === "A" ? (
-              <Button
-                variant="outline"
-                className="h-14 justify-start gap-3 border-border hover:bg-secondary"
-                onClick={() => setPhase({ step: "mpesa-phone" })}
-                disabled={!megapayEnabled}
-                title={
-                  megapayEnabled
-                    ? "Send M-Pesa prompt"
-                    : "MegaPay is not configured on the server"
-                }
-              >
-                <Smartphone className="size-5 text-primary" />
-                <span className="text-left">
-                  <span className="block font-semibold">MegaPay · M-Pesa</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {megapayEnabled
-                      ? "Send STK push to the customer's phone"
-                      : "Set MEGAPAY_API_KEY on the server first"}
+            {shop === "A" && (
+              <>
+                <Button
+                  variant="outline"
+                  className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+                  onClick={() => setPhase({ step: "mpesa" })}
+                  disabled={!megapayEnabled}
+                  title={mpesaNote}
+                >
+                  <Smartphone className="size-5 text-primary shrink-0" />
+                  <span className="text-left">
+                    <span className="block font-semibold">M-Pesa</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {mpesaNote} — you can serve other carts while you wait
+                    </span>
                   </span>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+                  onClick={() => setPhase({ step: "split" })}
+                  disabled={!megapayEnabled}
+                  title={mpesaNote}
+                >
+                  <Split className="size-5 text-primary shrink-0" />
+                  <span className="text-left">
+                    <span className="block font-semibold">Split · Cash + M-Pesa</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Part cash now, the rest by M-Pesa prompt
+                    </span>
+                  </span>
+                </Button>
+              </>
+            )}
+            <Button
+              variant="outline"
+              className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+              onClick={() => setPhase({ step: "debt" })}
+            >
+              <BookUser className="size-5 text-primary shrink-0" />
+              <span className="text-left">
+                <span className="block font-semibold">Debt · Pay later</span>
+                <span className="block text-xs text-muted-foreground">
+                  Record the customer's name & phone — collect later
                 </span>
-              </Button>
-            ) : (
+              </span>
+            </Button>
+            {shop === "B" && (
               <p className="text-xs text-muted-foreground text-center">
-                MegaPay M-Pesa prompts are enabled for Shop A only.
+                M-Pesa prompts are enabled for Shop A only.
               </p>
             )}
           </div>
@@ -249,11 +238,13 @@ export function CheckoutDialog({
                 className="bg-background border-input h-12 font-figures text-lg"
               />
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Change</span>
+            <div className="rounded-md border border-border bg-secondary/60 px-4 py-2.5 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">
+                Change to give
+              </span>
               <span
-                className={`font-figures font-semibold ${
-                  change !== null && change < 0 ? "text-destructive" : "text-primary"
+                className={`font-figures text-xl font-semibold ${
+                  change !== null && change < 0 ? "text-destructive" : "text-success"
                 }`}
               >
                 {change === null ? "—" : formatKes(Math.max(0, change))}
@@ -270,7 +261,14 @@ export function CheckoutDialog({
               <Button
                 className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
                 disabled={busy || (tendered !== null && tendered < total)}
-                onClick={payCash}
+                onClick={() =>
+                  runCheckout({
+                    paymentMethod: "cash",
+                    lines: linesPayload(),
+                    discount: tab.discount,
+                    tendered: tendered ?? total,
+                  })
+                }
               >
                 {busy ? <Loader2 className="size-4 animate-spin" /> : "Complete sale"}
               </Button>
@@ -278,7 +276,7 @@ export function CheckoutDialog({
           </div>
         )}
 
-        {phase.step === "mpesa-phone" && (
+        {phase.step === "mpesa" && (
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="mpesa-phone">Customer M-Pesa number</Label>
@@ -292,8 +290,8 @@ export function CheckoutDialog({
                 className="bg-background border-input h-12 font-figures text-lg"
               />
               <p className="text-xs text-muted-foreground">
-                The customer gets an M-Pesa prompt for {formatKes(total)} on this
-                phone.
+                The customer gets an M-Pesa prompt for {formatKes(total)}. The
+                cart waits in the background — you can keep selling.
               </p>
             </div>
             <div className="flex gap-2">
@@ -306,8 +304,15 @@ export function CheckoutDialog({
               </Button>
               <Button
                 className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
-                disabled={busy || phone.replace(/\D/g, "").length < 9}
-                onClick={payMpesa}
+                disabled={busy || !phoneValid}
+                onClick={() =>
+                  runCheckout({
+                    paymentMethod: "megapay",
+                    lines: linesPayload(),
+                    discount: tab.discount,
+                    customerPhone: phone,
+                  })
+                }
               >
                 {busy ? (
                   <Loader2 className="size-4 animate-spin" />
@@ -319,14 +324,161 @@ export function CheckoutDialog({
           </div>
         )}
 
-        {phase.step === "mpesa-waiting" && (
-          <div className="flex flex-col items-center gap-3 py-6 text-center">
-            <Loader2 className="size-8 animate-spin text-primary" />
-            <p className="font-medium">Waiting for customer…</p>
-            <p className="text-sm text-muted-foreground max-w-xs">
-              {phase.message} Ask the customer to enter their M-Pesa PIN. This
-              updates automatically.
-            </p>
+        {phase.step === "split" && (
+          <div className="space-y-3.5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="cash-part">Cash part (KES)</Label>
+                <Input
+                  id="cash-part"
+                  inputMode="decimal"
+                  autoFocus
+                  placeholder={formatPlain(Math.floor(total / 2))}
+                  value={cashPartText}
+                  onChange={(e) => setCashPartText(e.target.value)}
+                  className="bg-background border-input h-11 font-figures"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>M-Pesa part</Label>
+                <div className="h-11 rounded-md border border-border bg-secondary/60 px-3 flex items-center font-figures font-semibold">
+                  {splitMpesa !== null && splitMpesa > 0
+                    ? formatKes(splitMpesa)
+                    : "—"}
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="split-tendered">Cash received</Label>
+                <Input
+                  id="split-tendered"
+                  inputMode="decimal"
+                  placeholder={cashPart !== null ? formatPlain(cashPart) : "0"}
+                  value={tenderedText}
+                  onChange={(e) => setTenderedText(e.target.value)}
+                  className="bg-background border-input h-11 font-figures"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Change to give</Label>
+                <div
+                  className={`h-11 rounded-md border border-border bg-secondary/60 px-3 flex items-center font-figures font-semibold ${
+                    splitChange !== null && splitChange < 0
+                      ? "text-destructive"
+                      : "text-success"
+                  }`}
+                >
+                  {splitChange === null ? "—" : formatKes(Math.max(0, splitChange))}
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="split-phone">Customer M-Pesa number</Label>
+              <Input
+                id="split-phone"
+                inputMode="tel"
+                placeholder="0712 345 678"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className="bg-background border-input h-11 font-figures"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="border-border"
+                onClick={() => setPhase({ step: "choose" })}
+              >
+                Back
+              </Button>
+              <Button
+                className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
+                disabled={
+                  busy ||
+                  !phoneValid ||
+                  cashPart === null ||
+                  cashPart <= 0 ||
+                  cashPart >= total ||
+                  (splitTendered !== null && splitTendered < cashPart)
+                }
+                onClick={() =>
+                  runCheckout({
+                    paymentMethod: "split",
+                    lines: linesPayload(),
+                    discount: tab.discount,
+                    cashAmount: cashPart ?? 0,
+                    tendered: splitTendered ?? cashPart ?? 0,
+                    customerPhone: phone,
+                  })
+                }
+              >
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  "Take cash + send prompt"
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {phase.step === "debt" && (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="debt-name">Customer name</Label>
+              <Input
+                id="debt-name"
+                autoFocus
+                placeholder="e.g. Mama Njoroge"
+                value={debtName}
+                onChange={(e) => setDebtName(e.target.value)}
+                className="bg-background border-input h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="debt-phone">Phone number</Label>
+              <Input
+                id="debt-phone"
+                inputMode="tel"
+                placeholder="0712 345 678"
+                value={debtPhone}
+                onChange={(e) => setDebtPhone(e.target.value)}
+                className="bg-background border-input h-11 font-figures"
+              />
+              <p className="text-xs text-muted-foreground">
+                The goods and amount are saved under this customer — track and
+                collect from the Debts section.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="border-border"
+                onClick={() => setPhase({ step: "choose" })}
+              >
+                Back
+              </Button>
+              <Button
+                className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
+                disabled={busy || !debtName.trim() || !debtPhoneValid}
+                onClick={() =>
+                  runCheckout({
+                    paymentMethod: "debt",
+                    lines: linesPayload(),
+                    discount: tab.discount,
+                    customerName: debtName.trim(),
+                    customerPhone: debtPhone.trim(),
+                  })
+                }
+              >
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  `Record debt · ${formatKes(total)}`
+                )}
+              </Button>
+            </div>
           </div>
         )}
 

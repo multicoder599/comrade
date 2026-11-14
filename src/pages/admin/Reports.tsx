@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { trpc } from "@/providers/trpc";
 import { formatKes, formatQty } from "@/lib/money";
+import { paymentLabel } from "@/lib/labels";
 import { eatDateInputValue, eatRangeFromInputs } from "@/lib/dates";
 import { Download } from "lucide-react";
 
@@ -145,7 +146,7 @@ export default function Reports() {
               {(d?.payments ?? []).map((p) => (
                 <TableRow key={p.method} className="border-border">
                   <TableCell className="font-medium">
-                    {p.method === "megapay" ? "MegaPay · M-Pesa" : "Cash"}
+                    {paymentLabel(p.method)}
                   </TableCell>
                   <TableCell className="text-right font-figures">{p.sales}</TableCell>
                   <TableCell className="text-right font-figures">

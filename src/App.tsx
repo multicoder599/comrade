@@ -7,6 +7,7 @@ import Dashboard from "./pages/admin/Dashboard";
 import Products from "./pages/admin/Products";
 import Stock from "./pages/admin/Stock";
 import Sales from "./pages/admin/Sales";
+import Debts from "./pages/admin/Debts";
 import Reports from "./pages/admin/Reports";
 import Users from "./pages/admin/Users";
 import Settings from "./pages/admin/Settings";
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/admin/products" element={<Products />} />
         <Route path="/admin/stock" element={<Stock />} />
         <Route path="/admin/sales" element={<Sales />} />
+        <Route path="/admin/debts" element={<Debts />} />
         <Route path="/admin/reports" element={<Reports />} />
         <Route path="/admin/users" element={<Users />} />
         <Route path="/admin/settings" element={<Settings />} />

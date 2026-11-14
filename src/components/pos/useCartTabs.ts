@@ -1,9 +1,57 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MAX_TABS, newTab } from "./types";
-import type { CartLine, CartTab, CatalogProduct } from "./types";
+import { lineKey, MAX_TABS, newTab } from "./types";
+import type {
+  CartLine,
+  CartTab,
+  CatalogProduct,
+  PendingPayment,
+  PriceType,
+} from "./types";
 
 // Cashier tabs are kept in localStorage per shop so an accidental refresh
 // never loses an in-progress sale.
+
+type StoredLine = Partial<CartLine> & {
+  productId: number;
+  qty: number;
+  unitPrice: number;
+  listPrice: number;
+};
+type StoredTab = Partial<CartTab> & {
+  id: string;
+  label: string;
+  mode?: "retail" | "wholesale"; // legacy field, folded into line priceType
+};
+
+function normalizeTab(raw: StoredTab, index: number): CartTab {
+  const defaultType: PriceType = raw.mode === "wholesale" ? "wholesale" : "retail";
+  const lines: CartLine[] = (Array.isArray(raw.lines) ? raw.lines : []).map(
+    (l: StoredLine) => {
+      const priceType: PriceType =
+        l.priceType === "wholesale" ? "wholesale" : defaultType;
+      return {
+        key: l.key ?? lineKey(l.productId, priceType),
+        productId: l.productId,
+        name: l.name ?? "",
+        unit: l.unit ?? "pc",
+        qty: l.qty,
+        priceType,
+        unitPrice: l.unitPrice,
+        listPrice: l.listPrice,
+        stockQty: l.stockQty ?? 0,
+        allowBargain: l.allowBargain ?? true,
+      };
+    },
+  );
+  return {
+    id: raw.id,
+    label: raw.label ?? `Sale ${index + 1}`,
+    lines,
+    discount: raw.discount ?? 0,
+    pending: raw.pending ?? null,
+    notice: null,
+  };
+}
 
 export function useCartTabs(shop: "A" | "B") {
   const storageKey = `comrade_tabs_${shop}`;
@@ -11,9 +59,9 @@ export function useCartTabs(shop: "A" | "B") {
     try {
       const raw = localStorage.getItem(storageKey);
       if (raw) {
-        const parsed = JSON.parse(raw) as { tabs: CartTab[] };
+        const parsed = JSON.parse(raw) as { tabs: StoredTab[] };
         if (Array.isArray(parsed.tabs) && parsed.tabs.length > 0) {
-          return parsed.tabs.slice(0, MAX_TABS);
+          return parsed.tabs.slice(0, MAX_TABS).map(normalizeTab);
         }
       }
     } catch {
@@ -40,11 +88,13 @@ export function useCartTabs(shop: "A" | "B") {
   );
 
   const addTab = useCallback(() => {
-    if (tabs.length >= MAX_TABS) return;
-    const tab = newTab(tabs.length + 1);
-    setTabs((prev) => (prev.length >= MAX_TABS ? prev : [...prev, tab]));
+    const tab = newTab(Date.now() % 100000);
+    setTabs((prev) => {
+      if (prev.length >= MAX_TABS) return prev;
+      return [...prev, { ...tab, label: `Sale ${prev.length + 1}` }];
+    });
     setActiveId(tab.id);
-  }, [tabs.length]);
+  }, []);
 
   const closeTab = useCallback(
     (id: string) => {
@@ -65,77 +115,125 @@ export function useCartTabs(shop: "A" | "B") {
   );
 
   const addProduct = useCallback(
-    (product: CatalogProduct) => {
+    (product: CatalogProduct, priceType: PriceType = "retail") => {
       updateTab(active.id, (tab) => {
+        if (tab.pending) return tab; // locked while waiting for payment
         const listPrice =
-          tab.mode === "retail" ? product.retailPrice : product.wholesalePrice;
-        const existing = tab.lines.find((l) => l.productId === product.id);
+          priceType === "retail" ? product.retailPrice : product.wholesalePrice;
+        const key = lineKey(product.id, priceType);
+        const existing = tab.lines.find((l) => l.key === key);
         if (existing) {
           return {
             ...tab,
+            notice: null,
             lines: tab.lines.map((l) =>
-              l.productId === product.id ? { ...l, qty: l.qty + 1 } : l,
+              l.key === key ? { ...l, qty: l.qty + 1 } : l,
             ),
           };
         }
         const line: CartLine = {
+          key,
           productId: product.id,
           name: product.name,
           unit: product.unit,
           qty: 1,
+          priceType,
           unitPrice: listPrice,
           listPrice,
           stockQty: product.stockQty,
           allowBargain: product.allowBargain,
         };
-        return { ...tab, lines: [...tab.lines, line] };
+        return { ...tab, notice: null, lines: [...tab.lines, line] };
       });
     },
     [active.id, updateTab],
   );
 
-  /** Switch mode and re-price every line to the catalogue list price of that mode. */
-  const switchMode = useCallback(
-    (mode: "retail" | "wholesale", catalog: CatalogProduct[]) => {
-      updateTab(active.id, (tab) => ({
-        ...tab,
-        mode,
-        lines: tab.lines.map((l) => {
-          const p = catalog.find((c) => c.id === l.productId);
-          if (!p) return l;
-          const listPrice = mode === "retail" ? p.retailPrice : p.wholesalePrice;
-          return { ...l, listPrice, unitPrice: listPrice };
-        }),
-      }));
+  /** Flip a line between retail and wholesale pricing (re-priced to list). */
+  const setLinePriceType = useCallback(
+    (key: string, priceType: PriceType, catalog: CatalogProduct[]) => {
+      updateTab(active.id, (tab) => {
+        const line = tab.lines.find((l) => l.key === key);
+        if (!line || line.priceType === priceType) return tab;
+        const p = catalog.find((c) => c.id === line.productId);
+        if (!p) return tab;
+        const listPrice =
+          priceType === "retail" ? p.retailPrice : p.wholesalePrice;
+        const newKey = lineKey(line.productId, priceType);
+        const mergeTarget = tab.lines.find((l) => l.key === newKey);
+        if (mergeTarget) {
+          // Same product already present at that price type — merge quantities.
+          return {
+            ...tab,
+            lines: tab.lines
+              .filter((l) => l.key !== key)
+              .map((l) =>
+                l.key === newKey ? { ...l, qty: l.qty + line.qty } : l,
+              ),
+          };
+        }
+        return {
+          ...tab,
+          lines: tab.lines.map((l) =>
+            l.key === key
+              ? { ...l, key: newKey, priceType, listPrice, unitPrice: listPrice }
+              : l,
+          ),
+        };
+      });
     },
     [active.id, updateTab],
   );
 
   const updateLine = useCallback(
-    (productId: number, patch: Partial<CartLine>) => {
+    (key: string, patch: Partial<CartLine>) => {
       updateTab(active.id, (tab) => ({
         ...tab,
-        lines: tab.lines.map((l) =>
-          l.productId === productId ? { ...l, ...patch } : l,
-        ),
+        lines: tab.lines.map((l) => (l.key === key ? { ...l, ...patch } : l)),
       }));
     },
     [active.id, updateTab],
   );
 
   const removeLine = useCallback(
-    (productId: number) => {
+    (key: string) => {
       updateTab(active.id, (tab) => ({
         ...tab,
-        lines: tab.lines.filter((l) => l.productId !== productId),
+        lines: tab.lines.filter((l) => l.key !== key),
       }));
     },
     [active.id, updateTab],
   );
 
+  /** Empty a tab after its sale completes (works on any tab, not just active). */
+  const clearTab = useCallback(
+    (id: string) => {
+      updateTab(id, (t) => ({
+        ...newTab(1),
+        id: t.id,
+        label: t.label,
+      }));
+    },
+    [updateTab],
+  );
+
   const clearActive = useCallback(() => {
-    updateTab(active.id, (t) => ({ ...newTab(1), id: t.id, label: t.label }));
-  }, [active.id, updateTab]);
+    clearTab(active.id);
+  }, [active.id, clearTab]);
+
+  const setPending = useCallback(
+    (id: string, pending: PendingPayment | null) => {
+      updateTab(id, (t) => ({ ...t, pending }));
+    },
+    [updateTab],
+  );
+
+  const setNotice = useCallback(
+    (id: string, notice: string | null) => {
+      updateTab(id, (t) => ({ ...t, notice }));
+    },
+    [updateTab],
+  );
 
   return {
     tabs,
@@ -145,10 +243,13 @@ export function useCartTabs(shop: "A" | "B") {
     addTab,
     closeTab,
     addProduct,
-    switchMode,
+    setLinePriceType,
     updateLine,
     removeLine,
     clearActive,
+    clearTab,
+    setPending,
+    setNotice,
     updateTab,
   };
 }

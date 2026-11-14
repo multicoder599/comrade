@@ -21,6 +21,7 @@ import {
   Settings,
   LogOut,
   Menu,
+  Wallet,
 } from "lucide-react";
 
 const NAV = [
@@ -28,6 +29,7 @@ const NAV = [
   { to: "/admin/products", label: "Products & Prices", icon: Package },
   { to: "/admin/stock", label: "Stock", icon: Boxes },
   { to: "/admin/sales", label: "Sales", icon: ReceiptText },
+  { to: "/admin/debts", label: "Debts", icon: Wallet },
   { to: "/admin/reports", label: "Reports", icon: BarChart3 },
   { to: "/admin/users", label: "Users", icon: Users },
   { to: "/admin/settings", label: "Settings", icon: Settings },

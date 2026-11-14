@@ -1,5 +1,6 @@
 import { trpc } from "@/providers/trpc";
 import { formatKes, formatQty } from "@/lib/money";
+import { paymentLabel } from "@/lib/labels";
 import { eatDayRange } from "@/lib/dates";
 import { StatusBadge } from "@/pages/Pos";
 import { AlertTriangle } from "lucide-react";
@@ -81,7 +82,7 @@ export default function Dashboard() {
                 </span>
                 <span className="font-medium truncate flex-1">{sale.receiptNo}</span>
                 <span className="text-xs text-muted-foreground">
-                  {sale.paymentMethod === "megapay" ? "M-Pesa" : "Cash"}
+                  {paymentLabel(sale.paymentMethod)}
                 </span>
                 <StatusBadge status={sale.status} />
                 <span className="font-figures font-semibold w-24 text-right">

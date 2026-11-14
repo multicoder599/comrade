@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { trpc } from "@/providers/trpc";
 import { formatKes } from "@/lib/money";
+import { paymentLabel } from "@/lib/labels";
 import { StatusBadge } from "@/pages/Pos";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
 
@@ -116,7 +117,7 @@ export default function Sales() {
                 <TableCell>{sale.shop}</TableCell>
                 <TableCell className="text-muted-foreground">{sale.cashierName}</TableCell>
                 <TableCell className="capitalize text-muted-foreground">{sale.mode}</TableCell>
-                <TableCell>{sale.paymentMethod === "megapay" ? "M-Pesa" : "Cash"}</TableCell>
+                <TableCell>{paymentLabel(sale.paymentMethod)}</TableCell>
                 <TableCell>
                   <StatusBadge status={sale.status} />
                 </TableCell>

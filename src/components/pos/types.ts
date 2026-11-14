@@ -1,6 +1,7 @@
 export type CatalogProduct = {
   id: number;
   sku: string;
+  barcode: string | null;
   name: string;
   category: string;
   unit: string;
@@ -8,43 +9,63 @@ export type CatalogProduct = {
   retailPrice: number;
   wholesalePrice: number;
   wholesaleMinQty: number;
+  lastSoldPrice: number | null;
   allowBargain: boolean;
   stockQty: number;
   shop: "A" | "B";
 };
 
+export type PriceType = "retail" | "wholesale";
+
 export type CartLine = {
+  /** `${productId}:${priceType}` — retail and wholesale lines stay separate */
+  key: string;
   productId: number;
   name: string;
   unit: string;
   qty: number;
+  priceType: PriceType;
   /** actual charged unit price in cents (bargain-adjustable) */
   unitPrice: number;
-  /** catalogue price for the current sale mode */
+  /** catalogue price for the line's price type */
   listPrice: number;
   stockQty: number;
   allowBargain: boolean;
 };
 
+export function lineKey(productId: number, priceType: PriceType): string {
+  return `${productId}:${priceType}`;
+}
+
+/** An M-Pesa (or split) payment waiting for the customer to enter their PIN. */
+export type PendingPayment = {
+  saleId: number;
+  receiptNo: string;
+  method: "megapay" | "split";
+  total: number;
+  phone: string;
+};
+
 export type CartTab = {
   id: string;
   label: string;
-  mode: "retail" | "wholesale";
   lines: CartLine[];
-  customerName: string;
   discount: number; // cents
+  pending: PendingPayment | null;
+  /** transient message shown at the top of the cart (e.g. failed payment) */
+  notice: string | null;
 };
 
-export const MAX_TABS = 4;
+export const MAX_TABS = 6;
 
 export function newTab(index: number): CartTab {
   return {
     id: `tab-${Date.now()}-${index}`,
     label: `Sale ${index}`,
-    mode: "retail",
     lines: [],
-    customerName: "",
     discount: 0,
+    pending: null,
+    notice: null,
   };
 }
 

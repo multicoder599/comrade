@@ -16,18 +16,28 @@ Both ports are served by **one Node process**. The admin panel lives at the
 
 ## Features
 
+- **Parallel sales carts** — up to six cart columns side by side; switch between
+  customers instantly, even while another cart waits for an M-Pesa PIN
 - **Buying / selling prices** per product, with live **margin** shown in admin
-- **Retail & wholesale prices** — the cashier flips a switch per sale
+- **Retail & wholesale per line** — every cart line has its own R/W switch, so
+  one sale can mix both prices
 - **Bargaining** — per-product "allow bargain" toggle; the cashier can type any
-  price at the till (list price shown struck through)
-- **4 sale tabs** — the cashier runs up to four customers at once; tabs survive
-  a browser refresh
-- **MegaPay M-Pesa STK push** (Shop A) — customer gets a phone prompt, the till
-  confirms automatically; stock is restored if payment fails
+  price at the till (list price shown struck through), and the **last sold
+  price** is remembered on the product so you can see what it really went for
+- **Barcode scanning** — scan or type a barcode/SKU at the till to add items;
+  barcodes are set per product in admin
+- **Payment methods** — cash (with tendered + change), MegaPay **M-Pesa STK
+  push** (Shop A), **split payments** (part cash, part M-Pesa), and **debt**
+  (customer takes goods now, pays later). Pending M-Pesa carts wait in the
+  background — the receipt pops up when the customer enters their PIN
+- **Debt book** — cashier and admin both get a Debts section: customer name +
+  phone, items taken, running balance, partial payments, payment history
+- **Overpayment** — tender more than the total and the change is shown big and
+  clear at checkout and on the receipt
 - **Stock per shop** — sales decrement it, admin restocks, low-stock alerts
 - **Reports** — revenue / cost / profit per shop, per day, per payment method,
   top products, CSV export
-- **Receipts** — printable receipt after every sale
+- **Receipts** — printable receipt after every sale (and reprintable any time)
 - **Installable** — "Add to Home Screen" on the till tablet/phone (PWA)
 
 ## Default logins (change them!)
