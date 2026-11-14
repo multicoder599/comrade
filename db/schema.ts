@@ -83,6 +83,8 @@ export const sales = sqliteTable("sales", {
   mpesaAmount: integer("mpesa_amount"),
   customerName: text("customer_name"),
   customerPhone: text("customer_phone"),
+  // Set on debt sales: the customer's running debt tab this sale belongs to.
+  debtId: integer("debt_id"),
   mpesaRequestId: text("mpesa_request_id"),
   mpesaReceipt: text("mpesa_receipt"),
   createdAt: text("created_at")
@@ -136,7 +138,7 @@ export const debtPayments = sqliteTable("debt_payments", {
     .notNull()
     .references(() => debts.id),
   amount: integer("amount").notNull(),
-  method: text("method", { enum: ["cash", "megapay"] })
+  method: text("method", { enum: ["cash", "megapay", "credit"] })
     .notNull()
     .default("cash"),
   cashierName: text("cashier_name").notNull(),

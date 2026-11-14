@@ -29,3 +29,11 @@ export function parseKes(input: string): number | null {
 export function formatQty(qty: number): string {
   return qty % 1 === 0 ? String(qty) : qty.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
+
+/** Receipt style: always two decimals, no currency prefix ("1,250.00"). */
+export function formatAmount2(cents: number): string {
+  return (cents / 100).toLocaleString("en-KE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}

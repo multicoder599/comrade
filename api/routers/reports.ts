@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
-import { products, saleItems, sales, stocks } from "@db/schema";
+import { and, desc, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { debtPayments, debts, products, saleItems, sales, stocks } from "@db/schema";
 import { getDb } from "../queries/connection";
 import { createRouter, adminQuery } from "../middleware";
 
@@ -13,8 +13,11 @@ const rangeInput = z.object({
 export const reportsRouter = createRouter({
   summary: adminQuery.input(rangeInput).query(({ input }) => {
     const db = getDb();
+    // Debt sales are NOT revenue or profit — the money hasn't arrived yet.
+    // They enter the books as "Debt payments" when the customer pays up.
     const conds = [
       eq(sales.status, "completed"),
+      ne(sales.paymentMethod, "debt"),
       gte(sales.createdAt, input.from),
       lt(sales.createdAt, input.to),
       input.shop ? eq(sales.shop, input.shop) : undefined,
@@ -66,11 +69,28 @@ export const reportsRouter = createRouter({
       };
     };
 
-    const byMethod = (method: "cash" | "megapay" | "split" | "debt") => ({
+    const byMethod = (method: "cash" | "megapay" | "split") => ({
       method,
       sales: rows.filter((r) => r.paymentMethod === method).length,
       revenue: rows.filter((r) => r.paymentMethod === method).reduce((s, r) => s + r.total, 0),
     });
+
+    // Money actually collected against debts in this period.
+    const collectionConds = [
+      gte(debtPayments.createdAt, input.from),
+      lt(debtPayments.createdAt, input.to),
+      ne(debtPayments.method, "credit"),
+      input.shop ? eq(debts.shop, input.shop) : undefined,
+    ].filter(Boolean);
+    const collections = db
+      .select({
+        count: sql<number>`count(*)`,
+        total: sql<number>`coalesce(sum(${debtPayments.amount}), 0)`,
+      })
+      .from(debtPayments)
+      .innerJoin(debts, eq(debtPayments.debtId, debts.id))
+      .where(and(...collectionConds))
+      .get();
 
     // Group by Nairobi (EAT, UTC+3) calendar day for the trend table,
     // matching the EAT day boundaries the client queries with.
@@ -92,7 +112,16 @@ export const reportsRouter = createRouter({
       cost,
       profit: revenue - cost,
       shops: [perShop("A"), perShop("B")],
-      payments: [byMethod("cash"), byMethod("megapay"), byMethod("split"), byMethod("debt")],
+      payments: [
+        byMethod("cash"),
+        byMethod("megapay"),
+        byMethod("split"),
+        {
+          method: "debtPayments",
+          sales: collections?.count ?? 0,
+          revenue: collections?.total ?? 0,
+        },
+      ],
       byDay: [...byDayMap.values()].sort((a, b) => a.day.localeCompare(b.day)),
     };
   }),
@@ -103,6 +132,7 @@ export const reportsRouter = createRouter({
       const db = getDb();
       const conds = [
         eq(sales.status, "completed"),
+        ne(sales.paymentMethod, "debt"),
         gte(sales.createdAt, input.from),
         lt(sales.createdAt, input.to),
         input.shop ? eq(sales.shop, input.shop) : undefined,

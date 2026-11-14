@@ -68,6 +68,11 @@ export function CheckoutDialog({
 
   const checkout = trpc.sales.checkout.useMutation();
   const utils = trpc.useUtils();
+  // Known debt customers for this shop — lets the cashier add to an existing
+  // tab instead of creating a duplicate.
+  const customersQuery = trpc.debts.customers.useQuery(undefined, {
+    enabled: open && phase.step === "debt",
+  });
 
   useEffect(() => {
     if (open) {
@@ -425,6 +430,50 @@ export function CheckoutDialog({
 
         {phase.step === "debt" && (
           <div className="space-y-4">
+            {(customersQuery.data?.length ?? 0) > 0 && (
+              <div className="space-y-1.5">
+                <p className="micro-label">Existing customers — tap to add to their tab</p>
+                <div className="max-h-36 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                  {customersQuery.data!.map((c) => {
+                    const selected = debtPhone === c.phone;
+                    return (
+                      <button
+                        key={c.phone}
+                        type="button"
+                        onClick={() => {
+                          setDebtName(c.name);
+                          setDebtPhone(c.phone);
+                        }}
+                        className={`w-full px-3 py-2 flex items-center justify-between gap-2 text-left text-sm transition-colors cursor-pointer ${
+                          selected ? "bg-primary/10" : "hover:bg-secondary"
+                        }`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block font-medium truncate">
+                            {c.name}
+                          </span>
+                          <span className="block text-xs text-muted-foreground font-figures">
+                            {c.phone}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-xs font-figures text-right">
+                          {c.owes > 0 && (
+                            <span className="block text-warning">
+                              owes {formatKes(c.owes)}
+                            </span>
+                          )}
+                          {c.credit > 0 && (
+                            <span className="block text-success">
+                              credit {formatKes(c.credit)}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="debt-name">Customer name</Label>
               <Input
@@ -446,10 +495,25 @@ export function CheckoutDialog({
                 onChange={(e) => setDebtPhone(e.target.value)}
                 className="bg-background border-input h-11 font-figures"
               />
-              <p className="text-xs text-muted-foreground">
-                The goods and amount are saved under this customer — track and
-                collect from the Debts section.
-              </p>
+              {(() => {
+                const known = customersQuery.data?.find(
+                  (c) => c.phone === debtPhone.trim(),
+                );
+                if (known) {
+                  return (
+                    <p className="text-xs text-success">
+                      Existing customer — this sale is added to their tab.
+                      {known.credit > 0 &&
+                        ` ${formatKes(known.credit)} store credit applies automatically.`}
+                    </p>
+                  );
+                }
+                return (
+                  <p className="text-xs text-muted-foreground">
+                    New customer — a tab is opened in the Debts section.
+                  </p>
+                );
+              })()}
             </div>
             <div className="flex gap-2">
               <Button

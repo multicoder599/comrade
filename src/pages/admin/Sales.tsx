@@ -18,7 +18,7 @@ import {
 import { trpc } from "@/providers/trpc";
 import { formatKes } from "@/lib/money";
 import { paymentLabel } from "@/lib/labels";
-import { StatusBadge } from "@/pages/Pos";
+import { StatusBadge } from "@/components/pos/RecentView";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
 
 export default function Sales() {

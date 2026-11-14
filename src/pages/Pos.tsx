@@ -3,18 +3,10 @@ import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
 import { useAuth } from "@/lib/auth";
 import { usePortGuard } from "@/lib/ports";
 import { trpc } from "@/providers/trpc";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
-import { paymentLabel } from "@/lib/labels";
 import { useCartTabs } from "@/components/pos/useCartTabs";
 import {
   cartTotal,
@@ -29,7 +21,9 @@ import {
   type CompletedSale,
 } from "@/components/pos/CheckoutDialog";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
-import { DebtsSheet } from "@/components/pos/DebtsSheet";
+import { DebtsView } from "@/components/pos/DebtsView";
+import { RecentView } from "@/components/pos/RecentView";
+import { CashierDbView } from "@/components/pos/CashierDbView";
 import {
   Search,
   Plus,
@@ -42,8 +36,19 @@ import {
   ScanBarcode,
   Loader2,
   Smartphone,
+  ShoppingCart,
   Wallet,
+  Database,
 } from "lucide-react";
+
+type PosView = "till" | "debts" | "recent" | "database";
+
+const NAV_ITEMS: { key: PosView; label: string; icon: typeof Wallet }[] = [
+  { key: "till", label: "Till", icon: ShoppingCart },
+  { key: "debts", label: "Debts", icon: Wallet },
+  { key: "recent", label: "Recent", icon: ReceiptText },
+  { key: "database", label: "Database", icon: Database },
+];
 
 export default function Pos() {
   usePortGuard("shop");
@@ -58,12 +63,11 @@ export default function Pos() {
   );
 
   const cart = useCartTabs(shop ?? "A");
+  const [view, setView] = useState<PosView>("till");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [receiptSaleId, setReceiptSaleId] = useState<number | null>(null);
-  const [recentOpen, setRecentOpen] = useState(false);
-  const [debtsOpen, setDebtsOpen] = useState(false);
   const [scanText, setScanText] = useState("");
   const [scanNotice, setScanNotice] = useState<string | null>(null);
   const scanInputRef = useRef<HTMLInputElement>(null);
@@ -200,252 +204,282 @@ export default function Pos() {
     catalogQuery.refetch();
   }
 
+  const navButton = (item: (typeof NAV_ITEMS)[number], compact: boolean) => (
+    <button
+      key={item.key}
+      type="button"
+      onClick={() => setView(item.key)}
+      className={`flex ${compact ? "flex-row gap-1.5 px-3 py-2" : "flex-col gap-1 py-2.5"} items-center justify-center rounded-md text-xs font-medium transition-colors cursor-pointer ${
+        view === item.key
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+      }`}
+    >
+      <item.icon className="size-4" strokeWidth={1.75} />
+      {item.label}
+    </button>
+  );
+
   return (
-    <div className="h-dvh flex flex-col bg-background overflow-hidden">
-      {/* Header */}
-      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-border shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="size-2 rounded-full bg-primary shadow-[0_0_8px_hsl(var(--primary))]" />
-          <span className="font-display font-semibold tracking-tight">
-            {settingsQuery.data?.businessName ?? "Comrade Shop"}
-          </span>
-        </div>
+    <div className="h-dvh flex flex-col md:flex-row bg-background overflow-hidden">
+      {/* Mobile top bar */}
+      <header className="md:hidden flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+        <span className="size-2 rounded-full bg-primary shadow-[0_0_8px_hsl(var(--primary))] shrink-0" />
+        <span className="font-display font-semibold tracking-tight text-sm truncate">
+          {settingsQuery.data?.businessName ?? "Comrade Shop"}
+        </span>
         <Badge
           variant="outline"
-          className="border-primary/50 text-primary font-display"
+          className="border-primary/50 text-primary font-display text-[10px] shrink-0"
         >
           {shopName}
         </Badge>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-muted-foreground hidden sm:block">
-            {user.displayName}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-border gap-1.5"
-            onClick={() => setDebtsOpen(true)}
-          >
-            <Wallet className="size-4" />
-            <span className="hidden sm:inline">Debts</span>
-          </Button>
-          <Sheet open={recentOpen} onOpenChange={setRecentOpen}>
-            <SheetTrigger asChild>
-              <Button variant="outline" size="sm" className="border-border gap-1.5">
-                <ReceiptText className="size-4" />
-                <span className="hidden sm:inline">Recent</span>
-              </Button>
-            </SheetTrigger>
-            <SheetContent className="bg-card border-border w-full sm:max-w-md overflow-y-auto">
-              <SheetHeader>
-                <SheetTitle className="font-display">Recent sales — Shop {shop}</SheetTitle>
-              </SheetHeader>
-              <RecentSales
-                onReprint={(id) => {
-                  setReceiptSaleId(id);
-                  setRecentOpen(false);
-                }}
-              />
-            </SheetContent>
-          </Sheet>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={logout}
-            className="text-muted-foreground hover:text-foreground gap-1.5"
-          >
-            <LogOut className="size-4" />
-            <span className="hidden sm:inline">Log out</span>
-          </Button>
-        </div>
+        <button
+          type="button"
+          onClick={logout}
+          aria-label="Log out"
+          className="ml-auto text-muted-foreground hover:text-foreground cursor-pointer p-1.5"
+        >
+          <LogOut className="size-4" />
+        </button>
       </header>
+      {/* Mobile nav row */}
+      <nav className="md:hidden grid grid-cols-4 gap-1 px-2 py-1.5 border-b border-border shrink-0">
+        {NAV_ITEMS.map((item) => navButton(item, true))}
+      </nav>
 
-      <div className="flex-1 flex flex-col md:flex-row min-h-0">
-        {/* Products + scanner */}
-        <section className="relative flex-1 flex flex-col min-w-0 min-h-0">
-          <div className="p-3 space-y-2.5 border-b border-border shrink-0">
-            <div className="relative">
-              <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-primary" />
-              <Input
-                ref={scanInputRef}
-                value={scanText}
-                onChange={(e) => setScanText(e.target.value)}
-                onKeyDown={onScanKeyDown}
-                placeholder="Scan barcode or type SKU, then Enter…"
-                className="pl-9 pr-28 bg-card border-input h-10 font-figures"
-                autoFocus
-              />
-              <span
-                className={`absolute right-3 top-1/2 -translate-y-1/2 text-[11px] ${
-                  scanNotice
-                    ? scanNotice.startsWith("Added")
-                      ? "text-success"
-                      : "text-warning"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {scanNotice ?? "Scanner ready"}
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+      {/* Desktop left rail */}
+      <aside className="hidden md:flex w-20 shrink-0 border-r border-border bg-card/40 flex-col">
+        <div className="px-2 py-4 border-b border-border flex flex-col items-center gap-1.5 text-center">
+          <span className="size-2 rounded-full bg-primary shadow-[0_0_8px_hsl(var(--primary))]" />
+          <span className="font-display font-semibold tracking-tight text-[11px] leading-tight">
+            {settingsQuery.data?.businessName ?? "Comrade Shop"}
+          </span>
+          <Badge
+            variant="outline"
+            className="border-primary/50 text-primary text-[9px] px-1.5 py-0"
+          >
+            {shopName}
+          </Badge>
+        </div>
+        <nav className="flex-1 p-2 space-y-1">
+          {NAV_ITEMS.map((item) => navButton(item, false))}
+        </nav>
+        <div className="p-2 border-t border-border">
+          <p className="text-[10px] text-muted-foreground text-center mb-1.5 truncate">
+            {user.displayName}
+          </p>
+          <button
+            type="button"
+            onClick={logout}
+            className="w-full flex flex-col items-center gap-1 rounded-md py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer"
+          >
+            <LogOut className="size-4" strokeWidth={1.75} />
+            Log out
+          </button>
+        </div>
+      </aside>
+
+      {/* Content */}
+      {view === "till" ? (
+        <div className="flex-1 flex flex-col md:flex-row min-h-0 min-w-0">
+          {/* Products + scanner */}
+          <section className="relative flex-1 flex flex-col min-w-0 min-h-0">
+            <div className="p-3 space-y-2.5 border-b border-border shrink-0">
+              <div className="relative">
+                <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-primary" />
                 <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search product…"
-                  className="pl-9 bg-card border-input h-9 text-sm"
+                  ref={scanInputRef}
+                  value={scanText}
+                  onChange={(e) => setScanText(e.target.value)}
+                  onKeyDown={onScanKeyDown}
+                  placeholder="Scan barcode or type SKU, then Enter…"
+                  className="pl-9 pr-28 bg-card border-input h-10 font-figures"
+                  autoFocus
                 />
+                <span
+                  className={`absolute right-3 top-1/2 -translate-y-1/2 text-[11px] ${
+                    scanNotice
+                      ? scanNotice.startsWith("Added")
+                        ? "text-success"
+                        : "text-warning"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {scanNotice ?? "Scanner ready"}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search product…"
+                    className="pl-9 bg-card border-input h-9 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                <FilterChip
+                  active={category === null}
+                  onClick={() => setCategory(null)}
+                  label="All"
+                />
+                {categories.map((c) => (
+                  <FilterChip
+                    key={c}
+                    active={category === c}
+                    onClick={() => setCategory(category === c ? null : c)}
+                    label={c}
+                  />
+                ))}
               </div>
             </div>
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-              <FilterChip
-                active={category === null}
-                onClick={() => setCategory(null)}
-                label="All"
-              />
-              {categories.map((c) => (
-                <FilterChip
-                  key={c}
-                  active={category === c}
-                  onClick={() => setCategory(category === c ? null : c)}
-                  label={c}
+            <div className="flex-1 overflow-y-auto p-3">
+              {catalogQuery.isLoading ? (
+                <p className="text-sm text-muted-foreground p-4">Loading products…</p>
+              ) : visible.length === 0 ? (
+                <p className="text-sm text-muted-foreground p-4">
+                  No products match. Add products from the Database page or admin panel.
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
+                  {visible.map((p) => {
+                    const out = p.stockQty <= 0;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        disabled={out}
+                        onClick={() => cart.addProduct(p)}
+                        className={`text-left rounded-md border p-3 transition-colors cursor-pointer ${
+                          out
+                            ? "border-border bg-card/50 opacity-45 cursor-not-allowed"
+                            : "border-border bg-card hover:border-primary/60 hover:bg-secondary"
+                        }`}
+                      >
+                        <p className="text-sm font-medium leading-snug line-clamp-2 min-h-10">
+                          {p.name}
+                        </p>
+                        <div className="mt-2 flex items-baseline justify-between gap-1">
+                          <span className="font-figures font-semibold text-primary">
+                            {formatKes(p.retailPrice)}
+                          </span>
+                          <span
+                            className={`text-[11px] ${
+                              p.stockQty <= 5 ? "text-warning" : "text-muted-foreground"
+                            }`}
+                          >
+                            {out ? "Out of stock" : `${formatQty(p.stockQty)} ${p.unit}`}
+                          </span>
+                        </div>
+                        {p.wholesalePrice > 0 && p.wholesalePrice !== p.retailPrice && (
+                          <p className="mt-1 text-[10px] font-figures text-warning">
+                            W {formatKes(p.wholesalePrice)}
+                          </p>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Parallel carts */}
+          <section className="shrink-0 h-[46dvh] md:h-auto border-t md:border-t-0 md:border-l border-border flex flex-col bg-card/40">
+            <div className="flex-1 flex gap-2.5 overflow-x-auto snap-x snap-mandatory p-2.5 min-h-0">
+              {cart.tabs.map((tab) => (
+                <CartColumn
+                  key={tab.id}
+                  tab={tab}
+                  isActive={tab.id === cart.active.id}
+                  onFocus={() => cart.setActiveId(tab.id)}
+                  onClose={() => cart.closeTab(tab.id)}
+                  onQty={(key, qty) => cart.updateLine(key, { qty })}
+                  onPrice={(key, unitPrice) => cart.updateLine(key, { unitPrice })}
+                  onPriceType={(key, pt) => cart.setLinePriceType(key, pt, catalog)}
+                  onRemoveLine={(key) => cart.removeLine(key)}
+                  onDiscount={(discount) =>
+                    cart.updateTab(tab.id, (t) => ({
+                      ...t,
+                      discount: Math.min(discount, cartTotal(t).subtotal),
+                    }))
+                  }
+                  onClear={() => cart.clearTab(tab.id)}
+                  onCheckout={() => openCheckout(tab.id)}
+                  onCheckPayment={async () => {
+                    if (!tab.pending) return;
+                    try {
+                      const sale = await refreshPayment.mutateAsync({
+                        saleId: tab.pending.saleId,
+                      });
+                      if (sale.status === "completed") {
+                        cart.clearTab(tab.id);
+                        setReceiptSaleId(sale.id);
+                        utils.products.listForShop.invalidate();
+                      } else if (sale.status === "failed") {
+                        cart.setPending(tab.id, null);
+                        cart.setNotice(
+                          tab.id,
+                          "M-Pesa payment failed or was cancelled — stock restored.",
+                        );
+                      } else {
+                        cart.setNotice(tab.id, "Still waiting for the customer's PIN…");
+                      }
+                    } catch {
+                      cart.setNotice(tab.id, "Could not reach the server — try again.");
+                    }
+                  }}
+                  onCancelPending={() => {
+                    if (!tab.pending) return;
+                    if (
+                      window.confirm(
+                        `Cancel the pending M-Pesa sale ${tab.pending.receiptNo}? Stock will be restored.`,
+                      )
+                    ) {
+                      cancelSale.mutate(
+                        { saleId: tab.pending.saleId },
+                        {
+                          onSuccess: () => {
+                            cart.setPending(tab.id, null);
+                            cart.setNotice(tab.id, "Pending sale cancelled.");
+                            utils.products.listForShop.invalidate();
+                          },
+                        },
+                      );
+                    }
+                  }}
+                  onDismissNotice={() => cart.setNotice(tab.id, null)}
                 />
               ))}
+              {cart.tabs.length < MAX_TABS && (
+                <button
+                  type="button"
+                  onClick={cart.addTab}
+                  className="shrink-0 w-16 md:w-20 rounded-lg border border-dashed border-border flex flex-col items-center justify-center gap-1.5 text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors cursor-pointer snap-start"
+                >
+                  <Plus className="size-5" />
+                  <span className="text-[11px] font-medium">New sale</span>
+                </button>
+              )}
             </div>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3">
-            {catalogQuery.isLoading ? (
-              <p className="text-sm text-muted-foreground p-4">Loading products…</p>
-            ) : visible.length === 0 ? (
-              <p className="text-sm text-muted-foreground p-4">
-                No products match. Add products from the admin panel.
-              </p>
-            ) : (
-              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
-                {visible.map((p) => {
-                  const out = p.stockQty <= 0;
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      disabled={out}
-                      onClick={() => cart.addProduct(p)}
-                      className={`text-left rounded-md border p-3 transition-colors cursor-pointer ${
-                        out
-                          ? "border-border bg-card/50 opacity-45 cursor-not-allowed"
-                          : "border-border bg-card hover:border-primary/60 hover:bg-secondary"
-                      }`}
-                    >
-                      <p className="text-sm font-medium leading-snug line-clamp-2 min-h-10">
-                        {p.name}
-                      </p>
-                      <div className="mt-2 flex items-baseline justify-between gap-1">
-                        <span className="font-figures font-semibold text-primary">
-                          {formatKes(p.retailPrice)}
-                        </span>
-                        <span
-                          className={`text-[11px] ${
-                            p.stockQty <= 5 ? "text-warning" : "text-muted-foreground"
-                          }`}
-                        >
-                          {out ? "Out of stock" : `${formatQty(p.stockQty)} ${p.unit}`}
-                        </span>
-                      </div>
-                      {p.wholesalePrice > 0 && p.wholesalePrice !== p.retailPrice && (
-                        <p className="mt-1 text-[10px] font-figures text-warning">
-                          W {formatKes(p.wholesalePrice)}
-                        </p>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Parallel carts */}
-        <section className="shrink-0 h-[46dvh] md:h-auto border-t md:border-t-0 md:border-l border-border flex flex-col bg-card/40">
-          <div className="flex-1 flex gap-2.5 overflow-x-auto snap-x snap-mandatory p-2.5 min-h-0">
-            {cart.tabs.map((tab) => (
-              <CartColumn
-                key={tab.id}
-                tab={tab}
-                isActive={tab.id === cart.active.id}
-                catalog={catalog}
-                onFocus={() => cart.setActiveId(tab.id)}
-                onClose={() => cart.closeTab(tab.id)}
-                onQty={(key, qty) => cart.updateLine(key, { qty })}
-                onPrice={(key, unitPrice) => cart.updateLine(key, { unitPrice })}
-                onPriceType={(key, pt) => cart.setLinePriceType(key, pt, catalog)}
-                onRemoveLine={(key) => cart.removeLine(key)}
-                onDiscount={(discount) =>
-                  cart.updateTab(tab.id, (t) => ({
-                    ...t,
-                    discount: Math.min(discount, cartTotal(t).subtotal),
-                  }))
-                }
-                onClear={() => cart.clearTab(tab.id)}
-                onCheckout={() => openCheckout(tab.id)}
-                onCheckPayment={async () => {
-                  if (!tab.pending) return;
-                  try {
-                    const sale = await refreshPayment.mutateAsync({
-                      saleId: tab.pending.saleId,
-                    });
-                    if (sale.status === "completed") {
-                      cart.clearTab(tab.id);
-                      setReceiptSaleId(sale.id);
-                      utils.products.listForShop.invalidate();
-                    } else if (sale.status === "failed") {
-                      cart.setPending(tab.id, null);
-                      cart.setNotice(
-                        tab.id,
-                        "M-Pesa payment failed or was cancelled — stock restored.",
-                      );
-                    } else {
-                      cart.setNotice(tab.id, "Still waiting for the customer's PIN…");
-                    }
-                  } catch {
-                    cart.setNotice(tab.id, "Could not reach the server — try again.");
-                  }
-                }}
-                onCancelPending={() => {
-                  if (!tab.pending) return;
-                  if (
-                    window.confirm(
-                      `Cancel the pending M-Pesa sale ${tab.pending.receiptNo}? Stock will be restored.`,
-                    )
-                  ) {
-                    cancelSale.mutate(
-                      { saleId: tab.pending.saleId },
-                      {
-                        onSuccess: () => {
-                          cart.setPending(tab.id, null);
-                          cart.setNotice(tab.id, "Pending sale cancelled.");
-                          utils.products.listForShop.invalidate();
-                        },
-                      },
-                    );
-                  }
-                }}
-                onDismissNotice={() => cart.setNotice(tab.id, null)}
-              />
-            ))}
-            {cart.tabs.length < MAX_TABS && (
-              <button
-                type="button"
-                onClick={cart.addTab}
-                className="shrink-0 w-16 md:w-20 rounded-lg border border-dashed border-border flex flex-col items-center justify-center gap-1.5 text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors cursor-pointer snap-start"
-              >
-                <Plus className="size-5" />
-                <span className="text-[11px] font-medium">New sale</span>
-              </button>
-            )}
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      ) : view === "debts" ? (
+        <div className="flex-1 min-h-0 min-w-0">
+          <DebtsView onReceipt={(id) => setReceiptSaleId(id)} />
+        </div>
+      ) : view === "recent" ? (
+        <div className="flex-1 min-h-0 min-w-0">
+          <RecentView onReceipt={(id) => setReceiptSaleId(id)} />
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 min-w-0">
+          <CashierDbView />
+        </div>
+      )}
 
       <CheckoutDialog
         open={checkoutOpen}
@@ -465,13 +499,7 @@ export default function Pos() {
         open={receiptSaleId !== null}
         onOpenChange={(open) => !open && setReceiptSaleId(null)}
         businessName={settingsQuery.data?.businessName ?? "Comrade Shop"}
-      />
-      <DebtsSheet
-        open={debtsOpen}
-        onOpenChange={setDebtsOpen}
-        onReceipt={(saleId) => {
-          setReceiptSaleId(saleId);
-        }}
+        shopName={shopName}
       />
     </div>
   );
@@ -504,7 +532,6 @@ function FilterChip({
 type CartColumnProps = {
   tab: CartTab;
   isActive: boolean;
-  catalog: CatalogProduct[];
   onFocus: () => void;
   onClose: () => void;
   onQty: (key: string, qty: number) => void;
@@ -522,7 +549,6 @@ type CartColumnProps = {
 function CartColumn({
   tab,
   isActive,
-  catalog,
   onFocus,
   onClose,
   onQty,
@@ -841,80 +867,5 @@ function QtyButton({
     >
       {icon}
     </button>
-  );
-}
-
-function RecentSales({ onReprint }: { onReprint: (saleId: number) => void }) {
-  const listQuery = trpc.sales.list.useQuery({ limit: 50 });
-  const cancel = trpc.sales.cancel.useMutation({
-    onSuccess: () => listQuery.refetch(),
-  });
-
-  if (listQuery.isLoading)
-    return <p className="text-sm text-muted-foreground py-4">Loading…</p>;
-  const rows = listQuery.data ?? [];
-  if (rows.length === 0)
-    return (
-      <p className="text-sm text-muted-foreground py-4">No sales yet today.</p>
-    );
-
-  return (
-    <ul className="divide-y divide-border mt-2">
-      {rows.map((sale) => (
-        <li key={sale.id} className="py-2.5 flex items-center gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium truncate">{sale.receiptNo}</p>
-            <p className="text-xs text-muted-foreground">
-              {new Date(sale.createdAt).toLocaleTimeString("en-KE")} ·{" "}
-              {paymentLabel(sale.paymentMethod)}
-              {sale.customerName ? ` · ${sale.customerName}` : ""}
-            </p>
-          </div>
-          <StatusBadge status={sale.status} />
-          <span className="font-figures text-sm font-semibold">
-            {formatKes(sale.total)}
-          </span>
-          <div className="flex gap-1">
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-border h-8"
-              onClick={() => onReprint(sale.id)}
-            >
-              Receipt
-            </Button>
-            {(sale.status === "completed" || sale.status === "pending") && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 text-destructive hover:text-destructive"
-                disabled={cancel.isPending}
-                onClick={() => {
-                  if (window.confirm(`Cancel ${sale.receiptNo}? Stock will be restored.`)) {
-                    cancel.mutate({ saleId: sale.id });
-                  }
-                }}
-              >
-                Void
-              </Button>
-            )}
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    completed: "border-primary/50 text-primary",
-    pending: "border-warning/60 text-warning",
-    failed: "border-destructive/60 text-destructive",
-    cancelled: "border-muted-foreground/40 text-muted-foreground",
-  };
-  return (
-    <Badge variant="outline" className={`text-[10px] uppercase tracking-wide ${styles[status] ?? ""}`}>
-      {status}
-    </Badge>
   );
 }

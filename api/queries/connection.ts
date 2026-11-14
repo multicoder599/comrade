@@ -61,12 +61,14 @@ CREATE TABLE IF NOT EXISTS sales (
   mpesa_amount INTEGER,
   customer_name TEXT,
   customer_phone TEXT,
+  debt_id INTEGER,
   mpesa_request_id TEXT,
   mpesa_receipt TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sales_shop_date ON sales(shop, created_at);
 CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);
+CREATE INDEX IF NOT EXISTS idx_sales_debt ON sales(debt_id);
 CREATE TABLE IF NOT EXISTS sale_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   sale_id INTEGER NOT NULL REFERENCES sales(id),
@@ -98,7 +100,7 @@ CREATE TABLE IF NOT EXISTS debt_payments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   debt_id INTEGER NOT NULL REFERENCES debts(id),
   amount INTEGER NOT NULL,
-  method TEXT NOT NULL DEFAULT 'cash' CHECK (method IN ('cash','megapay')),
+  method TEXT NOT NULL DEFAULT 'cash' CHECK (method IN ('cash','megapay','credit')),
   cashier_name TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -159,6 +161,7 @@ function migrateSalesTable(sqlite: Database.Database) {
         mpesa_amount INTEGER,
         customer_name TEXT,
         customer_phone TEXT,
+        debt_id INTEGER,
         mpesa_request_id TEXT,
         mpesa_receipt TEXT,
         created_at TEXT NOT NULL
@@ -177,6 +180,43 @@ function migrateSalesTable(sqlite: Database.Database) {
       ALTER TABLE sales_new RENAME TO sales;
       CREATE INDEX IF NOT EXISTS idx_sales_shop_date ON sales(shop, created_at);
       CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);
+      CREATE INDEX IF NOT EXISTS idx_sales_debt ON sales(debt_id);
+    `);
+    sqlite.exec("COMMIT");
+  } catch (err) {
+    sqlite.exec("ROLLBACK");
+    throw err;
+  }
+  sqlite.pragma("foreign_keys = ON");
+}
+
+// debt_payments from the previous release only allows method cash/megapay.
+// Rebuild it if the CHECK constraint predates the 'credit' method.
+function migrateDebtPaymentsTable(sqlite: Database.Database) {
+  const row = sqlite
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'debt_payments'",
+    )
+    .get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("'credit'")) return;
+
+  sqlite.pragma("foreign_keys = OFF");
+  sqlite.exec("BEGIN");
+  try {
+    sqlite.exec(`
+      CREATE TABLE debt_payments_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        debt_id INTEGER NOT NULL REFERENCES debts(id),
+        amount INTEGER NOT NULL,
+        method TEXT NOT NULL DEFAULT 'cash' CHECK (method IN ('cash','megapay','credit')),
+        cashier_name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO debt_payments_new (id, debt_id, amount, method, cashier_name, created_at)
+      SELECT id, debt_id, amount, method, cashier_name, created_at FROM debt_payments;
+      DROP TABLE debt_payments;
+      ALTER TABLE debt_payments_new RENAME TO debt_payments;
+      CREATE INDEX IF NOT EXISTS idx_debt_payments_debt ON debt_payments(debt_id);
     `);
     sqlite.exec("COMMIT");
   } catch (err) {
@@ -198,10 +238,13 @@ function migrate(sqlite: Database.Database) {
   );
   ensureColumn(sqlite, "sales", "cash_amount", "cash_amount INTEGER");
   ensureColumn(sqlite, "sales", "mpesa_amount", "mpesa_amount INTEGER");
+  ensureColumn(sqlite, "sales", "debt_id", "debt_id INTEGER");
   migrateSalesTable(sqlite);
+  migrateDebtPaymentsTable(sqlite);
   sqlite.exec(
     "CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)",
   );
+  sqlite.exec("CREATE INDEX IF NOT EXISTS idx_sales_debt ON sales(debt_id)");
 }
 
 function bootstrap(sqlite: Database.Database) {

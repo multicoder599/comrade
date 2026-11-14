@@ -1,11 +1,18 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, ne, or, sql } from "drizzle-orm";
 import { debtPayments, debts, saleItems, sales } from "@db/schema";
 import { getDb } from "../queries/connection";
 import { createRouter, authedQuery } from "../middleware";
+import { customerCredit } from "./sales";
 
-// Customer debts: goods taken on credit, paid back over time.
+// Customer debts: goods taken on credit, paid back over time. Overpaying a
+// debt leaves the extra as store credit, auto-applied to the customer's next
+// debt purchase.
+
+function debtStatus(amount: number, paid: number): "open" | "partial" | "settled" {
+  return paid >= amount ? "settled" : paid > 0 ? "partial" : "open";
+}
 
 export const debtsRouter = createRouter({
   // Cashiers see their own shop; admins can filter by shop or see everything.
@@ -47,6 +54,40 @@ export const debtsRouter = createRouter({
         .all();
     }),
 
+  // Known debt customers (for the checkout picker): anyone with an unpaid tab
+  // or unused store credit.
+  customers: authedQuery.query(({ ctx }) => {
+    const db = getDb();
+    const shop = ctx.user.role === "cashier" ? ctx.user.shop : undefined;
+    const rows = db
+      .select()
+      .from(debts)
+      .where(and(shop ? eq(debts.shop, shop) : undefined, ne(debts.status, "cancelled")))
+      .orderBy(desc(debts.id))
+      .all();
+    const byPhone = new Map<
+      string,
+      { name: string; phone: string; owes: number; credit: number }
+    >();
+    for (const d of rows) {
+      const entry =
+        byPhone.get(d.customerPhone) ??
+        { name: d.customerName, phone: d.customerPhone, owes: 0, credit: 0 };
+      entry.name = d.customerName; // latest row wins (most recent spelling)
+      if (d.status === "open" || d.status === "partial") {
+        entry.owes += Math.max(0, d.amount - d.amountPaid);
+      }
+      byPhone.set(d.customerPhone, entry);
+    }
+    const result = [];
+    for (const entry of byPhone.values()) {
+      if (!shop) continue;
+      entry.credit = customerCredit(db, shop, entry.phone);
+      if (entry.owes > 0 || entry.credit > 0) result.push(entry);
+    }
+    return result.sort((a, b) => b.owes - a.owes);
+  }),
+
   // Outstanding totals per shop (for dashboard badges).
   summary: authedQuery.query(({ ctx }) => {
     const db = getDb();
@@ -69,7 +110,8 @@ export const debtsRouter = createRouter({
     return rows;
   }),
 
-  // One debt with its payment history and the items taken.
+  // One debt with its payment history and every item taken (across all sales
+  // merged into this tab).
   get: authedQuery
     .input(z.object({ id: z.number().int() }))
     .query(({ ctx, input }) => {
@@ -85,26 +127,29 @@ export const debtsRouter = createRouter({
         .where(eq(debtPayments.debtId, debt.id))
         .orderBy(desc(debtPayments.id))
         .all();
-      let items: (typeof saleItems.$inferSelect)[] = [];
-      let receiptNo: string | null = null;
-      if (debt.saleId) {
-        items = db
-          .select()
-          .from(saleItems)
-          .where(eq(saleItems.saleId, debt.saleId))
-          .all();
-        const sale = db
-          .select({ receiptNo: sales.receiptNo })
-          .from(sales)
-          .where(eq(sales.id, debt.saleId))
-          .get();
-        receiptNo = sale?.receiptNo ?? null;
-      }
-      return { debt, payments, items, receiptNo };
+      // All sales linked to this tab (new style), plus the legacy first sale.
+      const linkedSales = db
+        .select({ id: sales.id, receiptNo: sales.receiptNo, createdAt: sales.createdAt })
+        .from(sales)
+        .where(eq(sales.debtId, debt.id))
+        .orderBy(desc(sales.id))
+        .all();
+      const saleIds = new Set(linkedSales.map((s) => s.id));
+      if (debt.saleId) saleIds.add(debt.saleId);
+      const items =
+        saleIds.size > 0
+          ? db
+              .select()
+              .from(saleItems)
+              .where(inArray(saleItems.saleId, [...saleIds]))
+              .all()
+          : [];
+      const credit = customerCredit(db, debt.shop, debt.customerPhone);
+      return { debt, payments, items, linkedSales, credit };
     }),
 
-  // Record a (partial) repayment. Cash is taken at the till; the method is
-  // recorded for the books.
+  // Record a repayment. Paying MORE than the balance is allowed — the extra
+  // becomes store credit for the customer's next visit.
   recordPayment: authedQuery
     .input(
       z.object({
@@ -130,16 +175,15 @@ export const debtsRouter = createRouter({
           message: "This debt is already closed",
         });
       }
-      const balance = debt.amount - debt.amountPaid;
-      const amount = Math.min(input.amount, balance);
-      const paid = debt.amountPaid + amount;
-      const status = paid >= debt.amount ? "settled" : "partial";
+      const paid = debt.amountPaid + input.amount;
+      const status = debtStatus(debt.amount, paid);
+      const overpaidBy = Math.max(0, paid - debt.amount);
       const now = new Date().toISOString();
       db.transaction((t) => {
         t.insert(debtPayments)
           .values({
             debtId: debt.id,
-            amount,
+            amount: input.amount,
             method: input.method,
             cashierName: ctx.user.displayName,
             createdAt: now,
@@ -150,6 +194,9 @@ export const debtsRouter = createRouter({
           .where(eq(debts.id, debt.id))
           .run();
       });
-      return db.select().from(debts).where(eq(debts.id, debt.id)).get()!;
+      return {
+        debt: db.select().from(debts).where(eq(debts.id, debt.id)).get()!,
+        creditAdded: overpaidBy,
+      };
     }),
 });

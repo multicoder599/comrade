@@ -2,7 +2,7 @@ import { trpc } from "@/providers/trpc";
 import { formatKes, formatQty } from "@/lib/money";
 import { paymentLabel } from "@/lib/labels";
 import { eatDayRange } from "@/lib/dates";
-import { StatusBadge } from "@/pages/Pos";
+import { StatusBadge } from "@/components/pos/RecentView";
 import { AlertTriangle } from "lucide-react";
 
 export default function Dashboard() {

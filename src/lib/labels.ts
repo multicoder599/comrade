@@ -6,6 +6,8 @@ export function paymentLabel(method: string): string {
       return "Cash + M-Pesa";
     case "debt":
       return "Debt";
+    case "debtPayments":
+      return "Debt payments";
     default:
       return "Cash";
   }

@@ -5,6 +5,15 @@ import { products, stocks } from "@db/schema";
 import { getDb } from "../queries/connection";
 import { createRouter, authedQuery, adminQuery } from "../middleware";
 
+// Fields a cashier is trusted with from the till's Database page: selling
+// prices (retail/wholesale) and stock for their own shop.
+const priceInput = z.object({
+  id: z.number().int(),
+  retailPrice: z.number().int().min(0),
+  wholesalePrice: z.number().int().min(0),
+  wholesaleMinQty: z.number().min(0).optional(),
+});
+
 const productInput = z.object({
   sku: z.string().min(1).max(50),
   barcode: z.string().max(60).optional(),
@@ -158,8 +167,28 @@ export const productsRouter = createRouter({
       return { ok: true };
     }),
 
+  // Cashier-accessible: update only the selling prices of a product.
+  updatePrices: authedQuery.input(priceInput).mutation(({ input }) => {
+    const db = getDb();
+    const target = db.select().from(products).where(eq(products.id, input.id)).get();
+    if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+    db.update(products)
+      .set({
+        retailPrice: input.retailPrice,
+        wholesalePrice: input.wholesalePrice,
+        ...(input.wholesaleMinQty !== undefined
+          ? { wholesaleMinQty: input.wholesaleMinQty }
+          : {}),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(products.id, input.id))
+      .run();
+    return { ok: true };
+  }),
+
   // Set or add stock for a shop. `delta` adds to current qty, `setQty` overrides.
-  adjustStock: adminQuery
+  // Cashiers can only touch their own shop.
+  adjustStock: authedQuery
     .input(
       z.object({
         productId: z.number().int(),
@@ -168,7 +197,10 @@ export const productsRouter = createRouter({
         setQty: z.number().min(0).optional(),
       }),
     )
-    .mutation(({ input }) => {
+    .mutation(({ ctx, input }) => {
+      if (ctx.user.role === "cashier" && ctx.user.shop !== input.shop) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cashiers manage their own shop's stock only" });
+      }
       if (input.delta === undefined && input.setQty === undefined) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Give delta or setQty" });
       }
