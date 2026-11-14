@@ -120,7 +120,7 @@ export default function Reports() {
                   <TableCell className="text-right font-figures">
                     {formatKes(s.revenue)}
                   </TableCell>
-                  <TableCell className="text-right font-figures text-primary">
+                  <TableCell className="text-right font-figures text-success">
                     {formatKes(s.profit)}
                   </TableCell>
                 </TableRow>
@@ -215,7 +215,7 @@ export default function Reports() {
                   <TableCell className="text-right font-figures">
                     {formatKes(p.revenue)}
                   </TableCell>
-                  <TableCell className="text-right font-figures text-primary">
+                  <TableCell className="text-right font-figures text-success">
                     {formatKes(p.profit)}
                   </TableCell>
                 </TableRow>
@@ -249,7 +249,7 @@ function Stat({
       <p className="micro-label">{label}</p>
       <p
         className={`font-figures text-xl font-semibold mt-1.5 tracking-tight ${
-          accent ? "text-primary" : ""
+          accent ? "text-success" : ""
         }`}
       >
         {value}

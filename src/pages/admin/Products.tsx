@@ -286,7 +286,7 @@ export default function Products() {
                 value={form.sku}
                 onChange={(e) => setForm({ ...form, sku: e.target.value })}
                 className="bg-background border-input"
-                placeholder="SUGAR1KG"
+                placeholder="e.g. SUGAR1KG"
               />
             </div>
             <div className="space-y-1.5">
@@ -303,7 +303,7 @@ export default function Products() {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 className="bg-background border-input"
-                placeholder="Mumias Sugar 1kg"
+                placeholder="e.g. Sugar 1kg"
               />
             </div>
             <div className="space-y-1.5">

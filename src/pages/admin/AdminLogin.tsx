@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router";
+import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth, errorMessage } from "@/lib/auth";
 import { ShieldCheck, Loader2 } from "lucide-react";
+import { usePortGuard, sideUrl } from "@/lib/ports";
 
 export default function AdminLogin() {
   const [username, setUsername] = useState("");
@@ -13,6 +14,7 @@ export default function AdminLogin() {
   const [busy, setBusy] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const ports = usePortGuard("admin");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,16 +43,16 @@ export default function AdminLogin() {
             Comrade Shop
           </span>
         </div>
-        <Link to="/" className="micro-label hover:text-foreground transition-colors">
+        <a href={sideUrl("shop", ports)} className="micro-label hover:text-foreground transition-colors">
           Shop login
-        </Link>
+        </a>
       </header>
 
       <main className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-sm space-y-8">
           <div className="space-y-1.5 text-center">
             <ShieldCheck className="size-8 mx-auto text-primary" strokeWidth={1.5} />
-            <p className="micro-label">Back office · port 5106</p>
+            <p className="micro-label">Back office{ports ? ` · port ${ports.adminPort}` : ""}</p>
             <h1 className="font-display text-3xl font-semibold tracking-tight">
               Admin panel
             </h1>

@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router";
+import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth, errorMessage } from "@/lib/auth";
-import { trpc } from "@/providers/trpc";
+import { usePortGuard, sideUrl } from "@/lib/ports";
 import { Store, Loader2 } from "lucide-react";
 
 export default function ShopLogin() {
@@ -15,11 +15,7 @@ export default function ShopLogin() {
   const [busy, setBusy] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
-  const settingsQuery = trpc.settings.get.useQuery(undefined, {
-    retry: false,
-    enabled: false,
-  });
-  void settingsQuery;
+  const ports = usePortGuard("shop");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -48,12 +44,12 @@ export default function ShopLogin() {
             Comrade Shop
           </span>
         </div>
-        <Link
-          to="/admin"
+        <a
+          href={sideUrl("admin", ports)}
           className="micro-label hover:text-foreground transition-colors"
         >
           Admin login
-        </Link>
+        </a>
       </header>
 
       <main className="flex-1 flex items-center justify-center p-6">
@@ -134,9 +130,9 @@ export default function ShopLogin() {
       </main>
 
       <footer className="px-6 py-3 border-t border-border flex items-center gap-2">
-        <span className="size-1.5 rounded-full bg-[#b0ffc4]" />
+        <span className="size-1.5 rounded-full bg-success" />
         <span className="text-xs text-muted-foreground">
-          System online · Shop till port 5105
+          System online · Shop till{ports ? ` port ${ports.shopPort}` : ""}
         </span>
       </footer>
     </div>

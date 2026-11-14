@@ -26,8 +26,8 @@ export default defineConfig({
         short_name: "Comrade POS",
         description:
           "Point of sale for Comrade Shop — tills for Shop A and Shop B plus the admin panel.",
-        theme_color: "#0c0c0c",
-        background_color: "#0c0c0c",
+        theme_color: "#f5f3f0",
+        background_color: "#f5f3f0",
         display: "standalone",
         start_url: "/",
         icons: [

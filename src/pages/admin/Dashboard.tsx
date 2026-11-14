@@ -55,7 +55,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <p className="micro-label">Profit</p>
-                <p className="font-figures font-semibold mt-0.5 text-primary">
+                <p className="font-figures font-semibold mt-0.5 text-success">
                   {formatKes(s.profit)}
                 </p>
               </div>
@@ -143,7 +143,7 @@ function StatCard({
       <p className="micro-label">{label}</p>
       <p
         className={`font-figures text-xl font-semibold mt-1.5 tracking-tight ${
-          accent ? "text-primary" : ""
+          accent ? "text-success" : ""
         }`}
       >
         {value}

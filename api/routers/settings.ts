@@ -1,13 +1,21 @@
 import { z } from "zod";
 import { settings } from "@db/schema";
 import { getDb } from "../queries/connection";
-import { createRouter, authedQuery, adminQuery } from "../middleware";
+import { createRouter, publicQuery, authedQuery, adminQuery } from "../middleware";
 import { isMegaPayReady } from "../megapay";
+import { env } from "../lib/env";
 
 const EDITABLE_KEYS = ["business_name", "shop_a_name", "shop_b_name"] as const;
 type EditableKey = (typeof EDITABLE_KEYS)[number];
 
 export const settingsRouter = createRouter({
+  // Public: the login pages need the port split before anyone is signed in,
+  // so the till port never shows the admin UI and vice versa.
+  ports: publicQuery.query(() => ({
+    shopPort: env.shopPort,
+    adminPort: env.adminPort,
+  })),
+
   get: authedQuery.query(() => {
     const db = getDb();
     const rows = db.select().from(settings).all();

@@ -9,6 +9,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useAuth } from "@/lib/auth";
+import { usePortGuard } from "@/lib/ports";
 import { trpc } from "@/providers/trpc";
 import {
   LayoutDashboard,
@@ -36,6 +37,7 @@ export default function AdminLayout() {
   const { user, logout, loading } = useAuth();
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
+  usePortGuard("admin");
   const settingsQuery = trpc.settings.get.useQuery(undefined, {
     enabled: user?.role === "admin",
     retry: false,

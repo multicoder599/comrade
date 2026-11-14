@@ -4,38 +4,40 @@
 
 @layer base {
   :root {
-    /* Comrade Shop POS — dark terminal theme.
-       Background near-black, elevated surfaces, mint primary accent. */
-    --background: 0 0% 4.7%;        /* #0c0c0c */
-    --foreground: 0 0% 100%;
-    --card: 0 0% 7.8%;              /* #141414 */
-    --card-foreground: 0 0% 100%;
-    --popover: 0 0% 8.5%;
-    --popover-foreground: 0 0% 100%;
-    --primary: 165 84% 43%;         /* mint #00d9a3 */
-    --primary-foreground: 0 0% 4.7%;
-    --secondary: 0 0% 10.2%;        /* #1a1a1a */
-    --secondary-foreground: 0 0% 100%;
-    --muted: 0 0% 10.2%;
-    --muted-foreground: 240 5% 60%; /* #95959f */
-    --accent: 158 62% 23%;          /* deep forest #165f49 */
-    --accent-foreground: 137 100% 85%;
-    --destructive: 0 100% 63%;      /* #ff4444 */
+    /* Comrade Shop POS — light storefront theme.
+       Warm off-white background, white cards, ember-red primary. */
+    --background: 40 9% 95%;        /* #f5f3f0 */
+    --foreground: 20 8% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 20 8% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 8% 10%;
+    --primary: 13 85% 53%;          /* ember #ee4223 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 40 6% 91%;         /* #ebe8e4 */
+    --secondary-foreground: 20 8% 14%;
+    --muted: 40 6% 91%;
+    --muted-foreground: 30 4% 42%;
+    --accent: 13 85% 95%;           /* light ember tint */
+    --accent-foreground: 13 80% 38%;
+    --destructive: 0 72% 51%;       /* #dc2626 */
     --destructive-foreground: 0 0% 100%;
-    --warning: 52 99% 56%;          /* #fee420 */
-    --warning-foreground: 0 0% 4.7%;
-    --border: 0 0% 14%;
-    --input: 0 0% 16%;
-    --ring: 165 84% 43%;
-    --radius: 0.5rem;
-    --sidebar-background: 0 0% 6.5%;
-    --sidebar-foreground: 240 5% 60%;
-    --sidebar-primary: 165 84% 43%;
-    --sidebar-primary-foreground: 0 0% 4.7%;
-    --sidebar-accent: 0 0% 10.2%;
-    --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 0 0% 13%;
-    --sidebar-ring: 165 84% 43%;
+    --warning: 35 92% 50%;          /* amber #f59e0b — wholesale mode */
+    --warning-foreground: 0 0% 100%;
+    --success: 142 71% 32%;         /* green — profit */
+    --success-foreground: 0 0% 100%;
+    --border: 30 8% 87%;
+    --input: 30 8% 82%;
+    --ring: 13 85% 53%;
+    --radius: 0.75rem;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 30 4% 42%;
+    --sidebar-primary: 13 85% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 13 85% 95%;
+    --sidebar-accent-foreground: 13 80% 38%;
+    --sidebar-border: 30 8% 89%;
+    --sidebar-ring: 13 85% 53%;
   }
 }
 
@@ -49,14 +51,14 @@
     -webkit-font-smoothing: antialiased;
   }
   ::selection {
-    background: hsl(var(--warning));
-    color: hsl(var(--warning-foreground));
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
   }
 }
 
 @layer utilities {
   .font-display {
-    font-family: "Space Grotesk", "Inter", sans-serif;
+    font-family: "Poppins", "Inter", sans-serif;
   }
   .font-figures {
     font-family: "IBM Plex Mono", ui-monospace, monospace;

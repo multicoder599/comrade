@@ -81,36 +81,6 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `;
 
-type DemoProduct = {
-  sku: string;
-  name: string;
-  category: string;
-  unit: string;
-  buying: number;
-  retail: number;
-  wholesale: number;
-  minQty: number;
-  bargain: boolean;
-  stockA: number;
-  stockB: number;
-};
-
-// Demo catalogue (KES, cents) — seeded only when the products table is empty.
-// Delete or edit these from the admin panel; they exist so the till works
-// out of the box on first boot.
-const DEMO_PRODUCTS: DemoProduct[] = [
-  { sku: "UHT500", name: "Brookside UHT Milk 500ml", category: "Dairy", unit: "pc", buying: 5500, retail: 6500, wholesale: 6000, minQty: 6, bargain: true, stockA: 48, stockB: 30 },
-  { sku: "BREAD400", name: "Broadways White Bread 400g", category: "Bakery", unit: "pc", buying: 5000, retail: 6000, wholesale: 5500, minQty: 5, bargain: false, stockA: 25, stockB: 18 },
-  { sku: "SUGAR1KG", name: "Mumias Sugar 1kg", category: "Dry Goods", unit: "pc", buying: 14500, retail: 16500, wholesale: 15500, minQty: 10, bargain: true, stockA: 60, stockB: 42 },
-  { sku: "RICE2KG", name: "Pishori Rice 2kg", category: "Dry Goods", unit: "pc", buying: 38000, retail: 43000, wholesale: 40500, minQty: 5, bargain: true, stockA: 20, stockB: 15 },
-  { sku: "OIL1L", name: "Fresh Fri Cooking Oil 1L", category: "Dry Goods", unit: "pc", buying: 29000, retail: 33000, wholesale: 31000, minQty: 6, bargain: true, stockA: 36, stockB: 24 },
-  { sku: "FLOUR2KG", name: "Jogoo Maize Flour 2kg", category: "Dry Goods", unit: "pc", buying: 17500, retail: 19500, wholesale: 18500, minQty: 6, bargain: true, stockA: 40, stockB: 28 },
-  { sku: "SOAP800G", name: "Menengai Bar Soap 800g", category: "Household", unit: "pc", buying: 15000, retail: 17500, wholesale: 16000, minQty: 6, bargain: true, stockA: 22, stockB: 16 },
-  { sku: "SODA500", name: "Coca-Cola 500ml", category: "Beverages", unit: "pc", buying: 4500, retail: 6000, wholesale: 5000, minQty: 12, bargain: false, stockA: 96, stockB: 72 },
-  { sku: "WATER1L", name: "Keringet Water 1L", category: "Beverages", unit: "pc", buying: 4000, retail: 5000, wholesale: 4500, minQty: 12, bargain: false, stockA: 84, stockB: 60 },
-  { sku: "AIRTIME", name: "Safaricom Airtime Scratch 100", category: "Airtime", unit: "pc", buying: 9500, retail: 10000, wholesale: 9800, minQty: 10, bargain: false, stockA: 50, stockB: 35 },
-];
-
 function bootstrap(sqlite: Database.Database) {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
@@ -132,31 +102,8 @@ function bootstrap(sqlite: Database.Database) {
     insert.run("shopb", hashPassword("shopb123"), "Shop B Cashier", "cashier", "B", now);
   }
 
-  const productCount = sqlite
-    .prepare("SELECT COUNT(*) AS n FROM products")
-    .get() as { n: number };
-  if (productCount.n === 0) {
-    const insertProduct = sqlite.prepare(
-      `INSERT INTO products (sku, name, category, unit, buying_price, retail_price, wholesale_price, wholesale_min_qty, allow_bargain, active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    );
-    const insertStock = sqlite.prepare(
-      `INSERT INTO stocks (product_id, shop, qty) VALUES (?, ?, ?)`,
-    );
-    const tx = sqlite.transaction(() => {
-      for (const p of DEMO_PRODUCTS) {
-        const info = insertProduct.run(
-          p.sku, p.name, p.category, p.unit,
-          p.buying, p.retail, p.wholesale, p.minQty, p.bargain ? 1 : 0,
-          now, now,
-        );
-        const id = Number(info.lastInsertRowid);
-        insertStock.run(id, "A", p.stockA);
-        insertStock.run(id, "B", p.stockB);
-      }
-    });
-    tx();
-  }
+  // No demo products — the catalogue starts empty. Add real products with
+  // prices and stock from Admin → Products & Prices / Stock.
 
   const upsertSetting = sqlite.prepare(
     `INSERT INTO settings (key, value) VALUES (?, ?)

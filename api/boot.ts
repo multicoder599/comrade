@@ -108,8 +108,15 @@ if (env.isProduction) {
   // Duplicates are collapsed so you can point PORT at either of the others.
   const ports = [...new Set([env.shopPort, env.adminPort, env.port])];
   for (const port of ports) {
-    serve({ fetch: app.fetch, port }, () => {
+    const server = serve({ fetch: app.fetch, port }, () => {
       log.info(`Comrade Shop POS listening on http://0.0.0.0:${port}/`);
+    });
+    // A busy VPS may already have something on one of the ports (3000 is a
+    // common one). Warn and keep serving the others instead of crashing.
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      log.warn(
+        `port ${port} unavailable (${err.code ?? err.message}) — skipping it`,
+      );
     });
   }
 }

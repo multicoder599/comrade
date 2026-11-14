@@ -39,12 +39,17 @@ Both ports are served by **one Node process**. The admin panel lives at the
 | Shop B till | `shopb` | `shopb123` | cashier (B) |
 
 Change passwords from **Admin → Settings** (your own) and **Admin → Users**
-(others). Demo products are seeded on first boot — edit or delete them in
-**Admin → Products**.
+(others). The catalogue starts empty — add your real products and stock in
+**Admin → Products & Prices** / **Stock**.
 
 ## Deploy on your VPS (GitHub → pull)
 
-Requires Node.js 20+ on the VPS.
+Requires Node.js 20+ and C build tools on the VPS — `better-sqlite3` compiles
+a native addon during `npm install`. On Ubuntu/Debian:
+
+```bash
+sudo apt update && sudo apt install -y build-essential
+```
 
 ```bash
 # 1. push this folder to GitHub (from your machine)
@@ -56,20 +61,45 @@ git push -u origin main
 git clone git@github.com:YOURUSER/comrade-shop-pos.git
 cd comrade-shop-pos
 cp .env.example .env          # then edit .env — see below
+                              # (the app reads .env, NOT .env.example)
 npm install
 npm run build
 npm start                     # serves 5105 + 5106 + 3000
 ```
 
-Keep it running with pm2:
+Keep it running with pm2 — **use the bundled ecosystem file**: it sets
+`NODE_ENV=production`, without which the server starts but binds no ports
+(silent idle process, empty logs, connection refused):
 
 ```bash
 npm install -g pm2
-pm2 start "node dist/boot.js" --name comrade-pos
+pm2 start ecosystem.config.cjs
 pm2 save && pm2 startup
 ```
 
-To update later: `git pull && npm install && npm run build && pm2 restart comrade-pos`.
+To update later: `git pull && npm install && npm run build && pm2 restart comrade`.
+
+The app also binds `PORT` (default 3000) as a convenience port. If another app
+on your VPS already uses it, the server logs a warning and keeps serving
+5105/5106 — or set `PORT=<free port>` in `.env` to silence it.
+
+### Firewall — the ports must be open
+
+If the browser shows `ERR_CONNECTION_TIMED_OUT`, the packets are being
+dropped before they reach the app. Open both ports on the VPS:
+
+```bash
+sudo ufw allow 5105/tcp && sudo ufw allow 5106/tcp
+```
+
+If your provider also has a cloud firewall / security group (IBM Cloud, AWS
+security groups, etc.), add inbound TCP 5105 + 5106 there as well — that is
+separate from ufw. Quick checks on the VPS:
+
+```bash
+pm2 logs comrade-pos        # should show "listening on http://0.0.0.0:5105"
+curl -I http://localhost:5105   # should return HTTP 200
+```
 
 ### `.env` on the VPS
 

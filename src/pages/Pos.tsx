@@ -11,6 +11,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { useAuth } from "@/lib/auth";
+import { usePortGuard } from "@/lib/ports";
 import { trpc } from "@/providers/trpc";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
 import { useCartTabs } from "@/components/pos/useCartTabs";
@@ -30,6 +31,7 @@ import {
 } from "lucide-react";
 
 export default function Pos() {
+  usePortGuard("shop");
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const shop = user?.shop ?? null;

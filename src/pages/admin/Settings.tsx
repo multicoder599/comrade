@@ -95,7 +95,7 @@ export default function Settings() {
         <div className="flex items-center gap-2 text-sm">
           <span
             className={`size-2 rounded-full ${
-              megapayConfigured ? "bg-[#b0ffc4]" : "bg-destructive"
+              megapayConfigured ? "bg-success" : "bg-destructive"
             }`}
           />
           {megapayConfigured ? (
