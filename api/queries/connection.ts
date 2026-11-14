@@ -68,7 +68,11 @@ CREATE TABLE IF NOT EXISTS sales (
 );
 CREATE INDEX IF NOT EXISTS idx_sales_shop_date ON sales(shop, created_at);
 CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);
-CREATE INDEX IF NOT EXISTS idx_sales_debt ON sales(debt_id);
+-- NOTE: no indexes here on columns introduced after the first release
+-- (e.g. sales.debt_id, products.barcode). On existing databases the
+-- CREATE TABLE above is skipped but the CREATE INDEX still runs and
+-- fails with "no such column" before migrate() can add the column.
+-- Those indexes are created in migrate() / migrateSalesTable() instead.
 CREATE TABLE IF NOT EXISTS sale_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   sale_id INTEGER NOT NULL REFERENCES sales(id),
@@ -137,7 +141,8 @@ function migrateSalesTable(sqlite: Database.Database) {
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sales'",
     )
     .get() as { sql: string } | undefined;
-  if (!row || row.sql.includes("'split'")) return;
+  if (!row || (row.sql.includes("'split'") && row.sql.includes("'debt'")))
+    return;
 
   sqlite.pragma("foreign_keys = OFF");
   sqlite.exec("BEGIN");
@@ -168,13 +173,15 @@ function migrateSalesTable(sqlite: Database.Database) {
       );
       INSERT INTO sales_new (
         id, receipt_no, shop, cashier_id, cashier_name, mode, payment_method,
-        status, subtotal, discount, total, tendered, change, customer_name,
-        customer_phone, mpesa_request_id, mpesa_receipt, created_at
+        status, subtotal, discount, total, tendered, change, cash_amount,
+        mpesa_amount, customer_name, customer_phone, debt_id,
+        mpesa_request_id, mpesa_receipt, created_at
       )
       SELECT
         id, receipt_no, shop, cashier_id, cashier_name, mode, payment_method,
-        status, subtotal, discount, total, tendered, change, customer_name,
-        customer_phone, mpesa_request_id, mpesa_receipt, created_at
+        status, subtotal, discount, total, tendered, change, cash_amount,
+        mpesa_amount, customer_name, customer_phone, debt_id,
+        mpesa_request_id, mpesa_receipt, created_at
       FROM sales;
       DROP TABLE sales;
       ALTER TABLE sales_new RENAME TO sales;
