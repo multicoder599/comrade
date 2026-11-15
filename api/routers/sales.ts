@@ -311,10 +311,13 @@ export const salesRouter = createRouter({
 
       // --- MegaPay / split path: STK push first, then a pending sale ---
       if (needsMpesa) {
-        if (!isMegaPayReady()) {
+        if (!isMegaPayReady(shop)) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: "MegaPay is not configured on the server yet",
+            message:
+              shop === "A"
+                ? "MegaPay is not configured for Shop A yet (MEGAPAY_API_KEY / MEGAPAY_EMAIL)"
+                : "MegaPay is not configured for Shop B yet (MEGAPAY_B_API_KEY / MEGAPAY_B_EMAIL)",
           });
         }
         let cashPart = 0;
@@ -342,6 +345,7 @@ export const salesRouter = createRouter({
         let push: { requestId: string; message: string };
         try {
           push = await initiateStkPush({
+            shop,
             amountKes: Math.max(1, Math.round(mpesaPart / 100)),
             phone: input.customerPhone ?? "",
             reference,
@@ -397,7 +401,10 @@ export const salesRouter = createRouter({
       if (!sale) throw new TRPCError({ code: "NOT_FOUND" });
       if (sale.status !== "pending" || !sale.mpesaRequestId) return sale;
       try {
-        const status = await checkTransactionStatus(sale.mpesaRequestId);
+        const status = await checkTransactionStatus(
+          sale.shop as "A" | "B",
+          sale.mpesaRequestId,
+        );
         if (status.state === "success") {
           db.update(sales)
             .set({ status: "completed", mpesaReceipt: status.receipt ?? null })

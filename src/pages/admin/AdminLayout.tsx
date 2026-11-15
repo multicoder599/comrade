@@ -9,6 +9,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useAuth } from "@/lib/auth";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { usePortGuard } from "@/lib/ports";
 import { trpc } from "@/providers/trpc";
 import {
@@ -144,6 +145,7 @@ export default function AdminLayout() {
           </div>
         </main>
       </div>
+      <UpdateBanner />
 
       {/* Mobile nav drawer */}
       <Sheet open={navOpen} onOpenChange={setNavOpen}>

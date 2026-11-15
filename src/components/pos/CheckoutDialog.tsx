@@ -22,6 +22,7 @@ import {
   XCircle,
   Split,
   BookUser,
+  BadgePercent,
 } from "lucide-react";
 
 export type CompletedSale = {
@@ -44,6 +45,7 @@ type Phase =
   | { step: "cash" }
   | { step: "mpesa" }
   | { step: "split" }
+  | { step: "bargain" }
   | { step: "debt" }
   | { step: "error"; message: string };
 
@@ -62,6 +64,7 @@ export function CheckoutDialog({
   const [cashPartText, setCashPartText] = useState("");
   const [debtName, setDebtName] = useState("");
   const [debtPhone, setDebtPhone] = useState("");
+  const [bargainText, setBargainText] = useState("");
   const [busy, setBusy] = useState(false);
 
   const checkout = trpc.sales.checkout.useMutation();
@@ -80,6 +83,7 @@ export function CheckoutDialog({
       setCashPartText("");
       setDebtName("");
       setDebtPhone("");
+      setBargainText("");
       setBusy(false);
     }
   }, [open]);
@@ -122,11 +126,25 @@ export function CheckoutDialog({
     }
   }
 
+  // Bargain flow: the cashier enters the agreed amount at checkout; it is
+  // applied as a discount off the list total. All payment steps then work
+  // with the agreed (effective) total.
+  const subtotalAll = total + tab.discount;
+  const agreed = parseKes(bargainText);
+  const bargainValid = agreed !== null && agreed > 0 && agreed <= subtotalAll;
+  const bargainDiscount = bargainValid ? subtotalAll - agreed : null;
+  const effectiveDiscount = bargainDiscount ?? tab.discount;
+  const effectiveTotal = subtotalAll - effectiveDiscount;
+  function goChoose() {
+    setBargainText("");
+    setPhase({ step: "choose" });
+  }
+
   const tendered = parseKes(tenderedText);
-  const change = tendered !== null ? tendered - total : null;
+  const change = tendered !== null ? tendered - effectiveTotal : null;
 
   const cashPart = parseKes(cashPartText);
-  const splitMpesa = cashPart !== null ? total - cashPart : null;
+  const splitMpesa = cashPart !== null ? effectiveTotal - cashPart : null;
   const splitTendered = parseKes(tenderedText);
   const splitChange =
     splitTendered !== null && cashPart !== null
@@ -153,9 +171,15 @@ export function CheckoutDialog({
         <div className="rounded-md border border-border bg-secondary/60 px-4 py-3 flex items-baseline justify-between gap-3">
           <span className="micro-label shrink-0">Total due</span>
           <span className="font-figures text-2xl font-semibold truncate">
-            {formatKes(total)}
+            {formatKes(effectiveTotal)}
           </span>
         </div>
+        {bargainDiscount !== null && (
+          <p className="text-xs text-warning -mt-1">
+            Bargain — list price {formatKes(subtotalAll)}, discount{" "}
+            {formatKes(bargainDiscount)} applied
+          </p>
+        )}
 
         {phase.step === "choose" && (
           <div className="grid gap-2.5 min-w-0">
@@ -215,6 +239,88 @@ export function CheckoutDialog({
                 </span>
               </span>
             </Button>
+            <Button
+              variant="outline"
+              className="h-auto min-h-13 w-full min-w-0 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+              onClick={() => setPhase({ step: "bargain" })}
+            >
+              <BadgePercent className="size-5 text-primary shrink-0" />
+              <span className="text-left min-w-0">
+                <span className="block font-semibold">Bargain · Agreed price</span>
+                <span className="block text-xs text-muted-foreground whitespace-normal break-words">
+                  Enter the final amount you agreed with the customer
+                </span>
+              </span>
+            </Button>
+          </div>
+        )}
+
+        {phase.step === "bargain" && (
+          <div className="space-y-4">
+            <div className="rounded-md border border-border bg-secondary/60 px-4 py-2.5 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">List total</span>
+              <span className="font-figures font-semibold">
+                {formatKes(subtotalAll)}
+              </span>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="agreed">Agreed amount (KES)</Label>
+              <Input
+                id="agreed"
+                inputMode="decimal"
+                autoFocus
+                placeholder={formatPlain(subtotalAll)}
+                value={bargainText}
+                onChange={(e) => setBargainText(e.target.value)}
+                className="bg-background border-input h-12 font-figures text-lg"
+              />
+              <p className="text-xs text-muted-foreground">
+                {bargainValid
+                  ? (bargainDiscount ?? 0) > 0
+                    ? `Discount of ${formatKes(bargainDiscount ?? 0)} — customer pays ${formatKes(agreed ?? 0)}`
+                    : "Full price — no discount"
+                  : "Enter the final amount you agreed with the customer"}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <p className="micro-label">Pay the agreed amount with</p>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  variant="outline"
+                  className="border-border hover:bg-secondary gap-1.5"
+                  disabled={!bargainValid}
+                  onClick={() => setPhase({ step: "cash" })}
+                >
+                  <Banknote className="size-4 text-primary" />
+                  Cash
+                </Button>
+                <Button
+                  variant="outline"
+                  className="border-border hover:bg-secondary gap-1.5"
+                  disabled={!bargainValid || !megapayEnabled}
+                  onClick={() => setPhase({ step: "mpesa" })}
+                >
+                  <Smartphone className="size-4 text-primary" />
+                  M-Pesa
+                </Button>
+                <Button
+                  variant="outline"
+                  className="border-border hover:bg-secondary gap-1.5"
+                  disabled={!bargainValid || !megapayEnabled}
+                  onClick={() => setPhase({ step: "split" })}
+                >
+                  <Split className="size-4 text-primary" />
+                  Split
+                </Button>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={goChoose}
+            >
+              Back
+            </Button>
           </div>
         )}
 
@@ -226,7 +332,7 @@ export function CheckoutDialog({
                 id="tendered"
                 inputMode="decimal"
                 autoFocus
-                placeholder={formatPlain(total)}
+                placeholder={formatPlain(effectiveTotal)}
                 value={tenderedText}
                 onChange={(e) => setTenderedText(e.target.value)}
                 className="bg-background border-input h-12 font-figures text-lg"
@@ -248,19 +354,19 @@ export function CheckoutDialog({
               <Button
                 variant="outline"
                 className="border-border"
-                onClick={() => setPhase({ step: "choose" })}
+                onClick={goChoose}
               >
                 Back
               </Button>
               <Button
                 className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
-                disabled={busy || (tendered !== null && tendered < total)}
+                disabled={busy || (tendered !== null && tendered < effectiveTotal)}
                 onClick={() =>
                   runCheckout({
                     paymentMethod: "cash",
                     lines: linesPayload(),
-                    discount: tab.discount,
-                    tendered: tendered ?? total,
+                    discount: effectiveDiscount,
+                    tendered: tendered ?? effectiveTotal,
                   })
                 }
               >
@@ -284,7 +390,7 @@ export function CheckoutDialog({
                 className="bg-background border-input h-12 font-figures text-lg"
               />
               <p className="text-xs text-muted-foreground">
-                The customer gets an M-Pesa prompt for {formatKes(total)}. The
+                The customer gets an M-Pesa prompt for {formatKes(effectiveTotal)}. The
                 cart waits in the background — you can keep selling.
               </p>
             </div>
@@ -292,7 +398,7 @@ export function CheckoutDialog({
               <Button
                 variant="outline"
                 className="border-border"
-                onClick={() => setPhase({ step: "choose" })}
+                onClick={goChoose}
               >
                 Back
               </Button>
@@ -303,7 +409,7 @@ export function CheckoutDialog({
                   runCheckout({
                     paymentMethod: "megapay",
                     lines: linesPayload(),
-                    discount: tab.discount,
+                    discount: effectiveDiscount,
                     customerPhone: phone,
                   })
                 }
@@ -382,7 +488,7 @@ export function CheckoutDialog({
               <Button
                 variant="outline"
                 className="border-border"
-                onClick={() => setPhase({ step: "choose" })}
+                onClick={goChoose}
               >
                 Back
               </Button>
@@ -393,14 +499,14 @@ export function CheckoutDialog({
                   !phoneValid ||
                   cashPart === null ||
                   cashPart <= 0 ||
-                  cashPart >= total ||
+                  cashPart >= effectiveTotal ||
                   (splitTendered !== null && splitTendered < cashPart)
                 }
                 onClick={() =>
                   runCheckout({
                     paymentMethod: "split",
                     lines: linesPayload(),
-                    discount: tab.discount,
+                    discount: effectiveDiscount,
                     cashAmount: cashPart ?? 0,
                     tendered: splitTendered ?? cashPart ?? 0,
                     customerPhone: phone,
@@ -508,7 +614,7 @@ export function CheckoutDialog({
               <Button
                 variant="outline"
                 className="border-border"
-                onClick={() => setPhase({ step: "choose" })}
+                onClick={goChoose}
               >
                 Back
               </Button>
@@ -519,7 +625,7 @@ export function CheckoutDialog({
                   runCheckout({
                     paymentMethod: "debt",
                     lines: linesPayload(),
-                    discount: tab.discount,
+                    discount: effectiveDiscount,
                     customerName: debtName.trim(),
                     customerPhone: debtPhone.trim(),
                   })
@@ -528,7 +634,7 @@ export function CheckoutDialog({
                 {busy ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  `Record debt · ${formatKes(total)}`
+                  `Record debt · ${formatKes(effectiveTotal)}`
                 )}
               </Button>
             </div>

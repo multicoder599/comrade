@@ -133,6 +133,7 @@ export default function ShopLogin() {
         <span className="size-1.5 rounded-full bg-success" />
         <span className="text-xs text-muted-foreground">
           System online · Shop till{ports ? ` port ${ports.shopPort}` : ""}
+          {ports?.appVersion ? ` · v${ports.appVersion}` : ""}
         </span>
       </footer>
     </div>

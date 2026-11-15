@@ -1,4 +1,4 @@
-import { env, megapayConfigured } from "./lib/env";
+import { env, megapayConfigured, type ShopId } from "./lib/env";
 import { log } from "./lib/logger";
 
 // MegaPay (megapay.co.ke) M-Pesa STK Push integration.
@@ -12,8 +12,12 @@ import { log } from "./lib/logger";
 
 export class MegaPayError extends Error {}
 
-export function isMegaPayReady(): boolean {
-  return megapayConfigured();
+export function isMegaPayReady(shop: ShopId): boolean {
+  return megapayConfigured(shop);
+}
+
+function credsFor(shop: ShopId) {
+  return shop === "A" ? env.megapay.a : env.megapay.b;
 }
 
 /** Normalize a Kenyan phone number to 254XXXXXXXXX. */
@@ -39,16 +43,20 @@ type InitiateResponse = {
 };
 
 export async function initiateStkPush(input: {
+  shop: ShopId; // each shop prompts through its own MegaPay account
   amountKes: number; // whole KES (MegaPay takes a plain amount)
   phone: string;
   reference: string;
   description: string;
 }): Promise<{ requestId: string; message: string }> {
-  if (!megapayConfigured()) {
+  if (!megapayConfigured(input.shop)) {
     throw new MegaPayError(
-      "MegaPay is not configured. Set MEGAPAY_API_KEY and MEGAPAY_EMAIL on the server.",
+      input.shop === "A"
+        ? "MegaPay is not configured for Shop A. Set MEGAPAY_API_KEY and MEGAPAY_EMAIL on the server."
+        : "MegaPay is not configured for Shop B. Set MEGAPAY_B_API_KEY and MEGAPAY_B_EMAIL on the server.",
     );
   }
+  const creds = credsFor(input.shop);
   const msisdn = normalizeMsisdn(input.phone);
 
   let res: Response;
@@ -57,8 +65,8 @@ export async function initiateStkPush(input: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        api_key: env.megapay.apiKey,
-        email: env.megapay.email,
+        api_key: creds.apiKey,
+        email: creds.email,
         amount: input.amountKes,
         msisdn,
         callback_url: env.megapay.callbackUrl,
@@ -123,19 +131,21 @@ type StatusResponse = {
 };
 
 export async function checkTransactionStatus(
+  shop: ShopId,
   requestId: string,
 ): Promise<MegaPayStatus> {
-  if (!megapayConfigured()) {
-    throw new MegaPayError("MegaPay is not configured on the server.");
+  if (!megapayConfigured(shop)) {
+    throw new MegaPayError(`MegaPay is not configured for Shop ${shop}.`);
   }
+  const creds = credsFor(shop);
   let res: Response;
   try {
     res = await fetch(`${env.megapay.baseUrl}/transactionstatus`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        api_key: env.megapay.apiKey,
-        email: env.megapay.email,
+        api_key: creds.apiKey,
+        email: creds.email,
         transaction_request_id: requestId,
       }),
       signal: AbortSignal.timeout(15_000),

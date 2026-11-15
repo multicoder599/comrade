@@ -21,6 +21,7 @@ import {
   type CompletedSale,
 } from "@/components/pos/CheckoutDialog";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { DebtsView } from "@/components/pos/DebtsView";
 import { RecentView } from "@/components/pos/RecentView";
 import { CashierDbView } from "@/components/pos/CashierDbView";
@@ -501,7 +502,7 @@ export default function Pos() {
         open={checkoutOpen}
         onOpenChange={setCheckoutOpen}
         tab={cart.active}
-        megapayEnabled={settingsQuery.data?.megapayConfigured ?? false}
+        megapayEnabled={settingsQuery.data?.megapayConfigured?.[shop] ?? false}
         onCompleted={completeSale}
         onPending={(pending) => {
           cart.setPending(cart.active.id, pending);
@@ -516,6 +517,7 @@ export default function Pos() {
         businessName={settingsQuery.data?.businessName ?? "Comrade Shop"}
         shopName={shopName}
       />
+      <UpdateBanner />
     </div>
   );
 }

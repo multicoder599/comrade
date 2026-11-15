@@ -37,7 +37,9 @@ export default function Settings() {
     }
   }, [settingsQuery.data]);
 
-  const megapayConfigured = settingsQuery.data?.megapayConfigured ?? false;
+  const megapay = settingsQuery.data?.megapayConfigured;
+  const megapayA = megapay?.A ?? false;
+  const megapayB = megapay?.B ?? false;
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -46,6 +48,11 @@ export default function Settings() {
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           Settings
         </h1>
+        {settingsQuery.data?.appVersion && (
+          <p className="text-xs text-muted-foreground mt-1">
+            App version {settingsQuery.data.appVersion}
+          </p>
+        )}
       </div>
 
       <section className="rounded-lg border border-border bg-card p-4 space-y-3">
@@ -90,30 +97,51 @@ export default function Settings() {
         {feedback && <p className="text-sm text-muted-foreground">{feedback}</p>}
       </section>
 
-      <section className="rounded-lg border border-border bg-card p-4 space-y-2">
-        <h2 className="font-display font-semibold">MegaPay (M-Pesa) — Shop A</h2>
+      <section className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <h2 className="font-display font-semibold">MegaPay (M-Pesa)</h2>
+        <p className="text-xs text-muted-foreground">
+          Each shop prompts through its own MegaPay account, so the money
+          lands in the right account.
+        </p>
         <div className="flex items-center gap-2 text-sm">
           <span
             className={`size-2 rounded-full ${
-              megapayConfigured ? "bg-success" : "bg-destructive"
+              megapayA ? "bg-success" : "bg-destructive"
             }`}
           />
-          {megapayConfigured ? (
-            <span>
-              MegaPay API key is configured. Shop A can send M-Pesa prompts.
-            </span>
+          {megapayA ? (
+            <span>Shop A — configured, can send M-Pesa prompts.</span>
           ) : (
             <span>
-              Not configured. Set <code className="font-figures text-xs">MEGAPAY_API_KEY</code>{" "}
-              and <code className="font-figures text-xs">MEGAPAY_EMAIL</code> in the
-              server <code className="font-figures text-xs">.env</code> file, then
-              restart.
+              Shop A — not configured. Set{" "}
+              <code className="font-figures text-xs">MEGAPAY_API_KEY</code> and{" "}
+              <code className="font-figures text-xs">MEGAPAY_EMAIL</code> in the
+              server <code className="font-figures text-xs">.env</code>, then restart.
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <span
+            className={`size-2 rounded-full ${
+              megapayB ? "bg-success" : "bg-destructive"
+            }`}
+          />
+          {megapayB ? (
+            <span>Shop B — configured, can send M-Pesa prompts.</span>
+          ) : (
+            <span>
+              Shop B — not configured. Set{" "}
+              <code className="font-figures text-xs">MEGAPAY_B_API_KEY</code> and{" "}
+              <code className="font-figures text-xs">MEGAPAY_B_EMAIL</code> in the
+              server <code className="font-figures text-xs">.env</code>, then restart.
             </span>
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          Webhook URL for your MegaPay dashboard:{" "}
-          <code className="font-figures">http://YOUR-SERVER:5105/api/megapay/callback</code>
+          Webhook URL — set this in BOTH MegaPay accounts' dashboards:{" "}
+          <code className="font-figures">
+            http://169.58.58.133:5105/api/megapay/webhook
+          </code>
         </p>
       </section>
 

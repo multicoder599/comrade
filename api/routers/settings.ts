@@ -14,6 +14,8 @@ export const settingsRouter = createRouter({
   ports: publicQuery.query(() => ({
     shopPort: env.shopPort,
     adminPort: env.adminPort,
+    // Public so the login screens can show what's deployed.
+    appVersion: env.appVersion,
   })),
 
   get: authedQuery.query(() => {
@@ -25,7 +27,16 @@ export const settingsRouter = createRouter({
       shopAName: map["shop_a_name"] ?? "Comrade Shop A",
       shopBName: map["shop_b_name"] ?? "Comrade Shop B",
       currency: "KES",
-      megapayConfigured: isMegaPayReady(),
+      // Per-shop: each shop prompts through its own MegaPay account.
+      megapayConfigured: {
+        A: isMegaPayReady("A"),
+        B: isMegaPayReady("B"),
+      },
+      // Deployed app version + this server process's boot id. The tills poll
+      // bootId — when it changes, a new version was deployed and the till
+      // offers a one-tap refresh instead of silently running stale code.
+      appVersion: env.appVersion,
+      bootId: env.bootId,
     };
   }),
 

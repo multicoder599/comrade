@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { desc, eq, inArray } from "drizzle-orm";
 import { saleItems, sales, stocks } from "@db/schema";
 import { and, sql } from "drizzle-orm";
@@ -7,7 +7,9 @@ import { log } from "../lib/logger";
 
 // MegaPay webhook — receives the payment result after an STK push.
 // The STK payload sends MegaPay our callback_url (MEGAPAY_CALLBACK_URL,
-// default http://169.58.58.133:5105/api/megapay/callback).
+// default http://169.58.58.133:5105/api/megapay/webhook — the same URL set
+// in the MegaPay dashboard). Both shops' accounts post here; our reference
+// (COMRADE-A-… / COMRADE-B-…) tells them apart.
 //
 // Payload parsing and match fallbacks mirror the shop's proven Stallion
 // Minimart integration: MegaPay's field names have varied over time, so we
@@ -22,7 +24,12 @@ function str(v: unknown): string {
   return v === undefined || v === null ? "" : String(v);
 }
 
-megapayRoutes.post("/callback", async (c) => {
+// MegaPay posts to the URL configured in its dashboard — the shop's account
+// uses /api/megapay/webhook. Both paths land on the same handler.
+megapayRoutes.post("/webhook", megapayWebhookHandler);
+megapayRoutes.post("/callback", megapayWebhookHandler);
+
+async function megapayWebhookHandler(c: Context) {
   let data: WebhookPayload | null = await c.req.json().catch(() => null);
   if (typeof data === "string") {
     try {
@@ -142,4 +149,4 @@ megapayRoutes.post("/callback", async (c) => {
     });
   }
   return c.json({ ok: true });
-});
+}
