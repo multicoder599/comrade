@@ -27,6 +27,19 @@ const productInput = z.object({
   allowBargain: z.boolean().default(true),
 });
 
+// What a cashier needs to start selling a new item from the till. The code
+// doubles as barcode and SKU; buying price stays owner knowledge (admin sets
+// it later from the admin panel).
+const cashierProductInput = z.object({
+  name: z.string().min(1).max(120),
+  code: z.string().min(1).max(60),
+  category: z.string().min(1).max(60).default("General"),
+  unit: z.string().min(1).max(20).default("pc"),
+  retailPrice: z.number().int().min(0),
+  wholesalePrice: z.number().int().min(0).default(0),
+  initialStock: z.number().min(0).default(0),
+});
+
 function assertBarcodeFree(
   db: ReturnType<typeof getDb>,
   barcode: string | null | undefined,
@@ -121,6 +134,65 @@ export const productsRouter = createRouter({
     });
     return { id: tx };
   }),
+
+  // Till-side product creation: cashier adds the item with its selling price
+  // and opening stock for their own shop. Buying price starts at 0 — the
+  // admin fills in the real cost price later.
+  cashierCreate: authedQuery
+    .input(cashierProductInput)
+    .mutation(({ ctx, input }) => {
+      const db = getDb();
+      const shop = ctx.user.role === "cashier" ? (ctx.user.shop ?? "A") : "A";
+      const code = input.code.trim();
+      const existing = db
+        .select()
+        .from(products)
+        .where(or(eq(products.sku, code), eq(products.barcode, code)))
+        .get();
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `That code is already used by "${existing.name}"`,
+        });
+      }
+      const now = new Date().toISOString();
+      const tx = db.transaction((t) => {
+        const info = t
+          .insert(products)
+          .values({
+            sku: code,
+            barcode: code,
+            name: input.name.trim(),
+            category: input.category.trim() || "General",
+            unit: input.unit.trim() || "pc",
+            buyingPrice: 0,
+            retailPrice: input.retailPrice,
+            wholesalePrice: input.wholesalePrice,
+            wholesaleMinQty: 1,
+            allowBargain: true,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+        const id = Number(info.lastInsertRowid);
+        t.insert(stocks)
+          .values({
+            productId: id,
+            shop: "A",
+            qty: shop === "A" ? input.initialStock : 0,
+          })
+          .run();
+        t.insert(stocks)
+          .values({
+            productId: id,
+            shop: "B",
+            qty: shop === "B" ? input.initialStock : 0,
+          })
+          .run();
+        return id;
+      });
+      return { id: tx };
+    }),
 
   update: adminQuery
     .input(productInput.partial().extend({ id: z.number().int(), active: z.boolean().optional() }))

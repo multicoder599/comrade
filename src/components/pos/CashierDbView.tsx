@@ -13,16 +13,17 @@ import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/lib/auth";
 import { errorMessage } from "@/lib/auth";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
-import { Boxes, Pencil, Search } from "lucide-react";
+import { Boxes, Pencil, Plus, ScanBarcode, Search } from "lucide-react";
 
-// Cashier database page: see stock, top it up, and adjust selling prices
-// (retail / wholesale) without needing the admin panel.
+// Cashier database page: create products, top up stock, and adjust selling
+// prices (retail / wholesale) without needing the admin panel.
 
 type Row = {
   id: number;
   sku: string;
   barcode: string | null;
   name: string;
+  category: string;
   unit: string;
   retailPrice: number;
   wholesalePrice: number;
@@ -41,6 +42,16 @@ export function CashierDbView() {
   const [minQty, setMinQty] = useState("1");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [newProduct, setNewProduct] = useState({
+    name: "",
+    code: "",
+    category: "",
+    unit: "pc",
+    retail: "",
+    wholesale: "",
+    stock: "",
+  });
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const listQuery = trpc.products.listForShop.useQuery({ shop });
   const adjustStock = trpc.products.adjustStock.useMutation({
@@ -59,6 +70,23 @@ export function CashierDbView() {
     },
     onError: (e) => setError(errorMessage(e)),
   });
+  const createProduct = trpc.products.cashierCreate.useMutation({
+    onSuccess: () => {
+      listQuery.refetch();
+      setNewProduct({
+        name: "",
+        code: "",
+        category: "",
+        unit: "pc",
+        retail: "",
+        wholesale: "",
+        stock: "",
+      });
+      setCreateError(null);
+      flash("Product created");
+    },
+    onError: (e) => setCreateError(errorMessage(e)),
+  });
 
   function flash(message: string) {
     setNotice(message);
@@ -74,6 +102,37 @@ export function CashierDbView() {
       (p.barcode ?? "").toLowerCase().includes(term)
     );
   });
+  const categories = [
+    ...new Set((listQuery.data ?? []).map((p) => p.category)),
+  ].sort();
+
+  function submitNewProduct() {
+    const retailPrice = parseKes(newProduct.retail);
+    const wholesalePrice = newProduct.wholesale.trim()
+      ? parseKes(newProduct.wholesale)
+      : 0;
+    if (!newProduct.name.trim() || !newProduct.code.trim()) {
+      setCreateError("Name and barcode/SKU are required");
+      return;
+    }
+    if (retailPrice === null || retailPrice <= 0) {
+      setCreateError("Enter a valid retail price");
+      return;
+    }
+    if (wholesalePrice === null) {
+      setCreateError("Enter a valid wholesale price (or leave it empty)");
+      return;
+    }
+    createProduct.mutate({
+      name: newProduct.name.trim(),
+      code: newProduct.code.trim(),
+      category: newProduct.category.trim() || "General",
+      unit: newProduct.unit.trim() || "pc",
+      retailPrice,
+      wholesalePrice,
+      initialStock: Number(newProduct.stock) || 0,
+    });
+  }
 
   function openEdit(p: Row) {
     setEditing(p);
@@ -101,7 +160,7 @@ export function CashierDbView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-4">
+      <div className="w-full max-w-6xl p-4 md:p-6 space-y-4">
         <div className="flex items-end justify-between gap-3 flex-wrap">
           <div>
             <p className="micro-label">Shop {shop}</p>
@@ -112,6 +171,110 @@ export function CashierDbView() {
           {notice && (
             <p className="text-sm text-success font-medium">{notice}</p>
           )}
+        </div>
+
+        {/* Add new product — buying price is set later by the admin */}
+        <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+          <p className="micro-label flex items-center gap-1.5">
+            <Plus className="size-3.5" /> Add new product
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+            <Input
+              placeholder="Product name, e.g. Bread"
+              value={newProduct.name}
+              onChange={(e) =>
+                setNewProduct((s) => ({ ...s, name: e.target.value }))
+              }
+              className="col-span-2 bg-background border-input h-9 text-sm"
+            />
+            <div className="relative">
+              <ScanBarcode className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-primary" />
+              <Input
+                placeholder="Barcode / SKU"
+                value={newProduct.code}
+                onChange={(e) =>
+                  setNewProduct((s) => ({ ...s, code: e.target.value }))
+                }
+                className="pl-8 bg-background border-input h-9 text-sm font-figures"
+              />
+            </div>
+            <div>
+              <Input
+                placeholder="Category"
+                list="cashier-categories"
+                value={newProduct.category}
+                onChange={(e) =>
+                  setNewProduct((s) => ({ ...s, category: e.target.value }))
+                }
+                className="bg-background border-input h-9 text-sm"
+              />
+              <datalist id="cashier-categories">
+                {categories.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </div>
+            <Input
+              placeholder="Unit (pc / kg)"
+              value={newProduct.unit}
+              onChange={(e) =>
+                setNewProduct((s) => ({ ...s, unit: e.target.value }))
+              }
+              className="bg-background border-input h-9 text-sm"
+            />
+            <Input
+              placeholder="Retail price (KES)"
+              inputMode="decimal"
+              value={newProduct.retail}
+              onChange={(e) =>
+                setNewProduct((s) => ({ ...s, retail: e.target.value }))
+              }
+              className="bg-background border-input h-9 text-sm font-figures"
+            />
+            <Input
+              placeholder="Wholesale price (optional)"
+              inputMode="decimal"
+              value={newProduct.wholesale}
+              onChange={(e) =>
+                setNewProduct((s) => ({ ...s, wholesale: e.target.value }))
+              }
+              className="bg-background border-input h-9 text-sm font-figures"
+            />
+            <Input
+              placeholder="Opening stock qty"
+              inputMode="decimal"
+              value={newProduct.stock}
+              onChange={(e) =>
+                setNewProduct((s) => ({ ...s, stock: e.target.value }))
+              }
+              className="bg-background border-input h-9 text-sm font-figures"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            {createError ? (
+              <p className="text-xs text-destructive" role="alert">
+                {createError}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                The admin sets the buying price later from the admin panel.
+              </p>
+            )}
+            <Button
+              size="sm"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
+              disabled={
+                createProduct.isPending ||
+                !newProduct.name.trim() ||
+                !newProduct.code.trim() ||
+                !newProduct.retail.trim()
+              }
+              onClick={submitNewProduct}
+            >
+              <Plus className="size-4 mr-1" />
+              {createProduct.isPending ? "Adding…" : "Add product"}
+            </Button>
+          </div>
         </div>
 
         <div className="relative max-w-sm">
@@ -129,7 +292,7 @@ export function CashierDbView() {
         ) : rows.length === 0 ? (
           <div className="rounded-lg border border-border bg-card p-10 text-center text-muted-foreground">
             <Boxes className="size-6 mx-auto mb-2" strokeWidth={1.5} />
-            <p className="text-sm">No products yet — the admin adds them.</p>
+            <p className="text-sm">No products yet — add your first one above.</p>
           </div>
         ) : (
           <ul className="rounded-lg border border-border bg-card divide-y divide-border overflow-hidden">

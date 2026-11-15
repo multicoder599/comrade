@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, ne, or, gte, lt, inArray, sql } from "drizzle-orm";
 import { debtPayments, debts, products, saleItems, sales, stocks } from "@db/schema";
 import { getDb } from "../queries/connection";
-import { createRouter, authedQuery } from "../middleware";
+import { createRouter, authedQuery, adminQuery } from "../middleware";
 import {
   checkTransactionStatus,
   initiateStkPush,
@@ -28,12 +28,10 @@ function receiptNo(shop: string, id: number): string {
 type Db = ReturnType<typeof getDb>;
 type DbOrTx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-function restock(db: DbOrTx, saleId: number) {
-  const sale = db.select().from(sales).where(eq(sales.id, saleId)).get();
-  if (!sale) return;
-  const items = db.select().from(saleItems).where(eq(saleItems.saleId, saleId)).all();
+function restockTx(t: DbOrTx, sale: { id: number; shop: string }) {
+  const items = t.select().from(saleItems).where(eq(saleItems.saleId, sale.id)).all();
   for (const item of items) {
-    db.update(stocks)
+    t.update(stocks)
       .set({ qty: sql`${stocks.qty} + ${item.qty}` })
       .where(and(eq(stocks.productId, item.productId), eq(stocks.shop, sale.shop)))
       .run();
@@ -410,7 +408,7 @@ export const salesRouter = createRouter({
         } else if (status.state === "failed") {
           db.transaction((t) => {
             t.update(sales).set({ status: "failed" }).where(eq(sales.id, sale.id)).run();
-            restock(t, sale.id);
+            restockTx(t, sale);
           });
         }
       } catch (err) {
@@ -476,33 +474,129 @@ export const salesRouter = createRouter({
       if (sale.status === "cancelled") return sale;
       db.transaction((t) => {
         t.update(sales).set({ status: "cancelled" }).where(eq(sales.id, sale.id)).run();
-        if (sale.status === "completed" || sale.status === "pending") {
-          restock(t, sale.id);
-        }
-        // Debt sale cancelled → pull its amount back out of the customer's tab.
-        if (sale.paymentMethod === "debt") {
-          if (sale.debtId) {
-            const debt = t.select().from(debts).where(eq(debts.id, sale.debtId)).get();
-            if (debt && debt.status !== "cancelled") {
-              const amount = Math.max(0, debt.amount - sale.total);
-              t.update(debts)
-                .set({
-                  amount,
-                  status: debtStatus(amount, debt.amountPaid),
-                  updatedAt: new Date().toISOString(),
-                })
-                .where(eq(debts.id, debt.id))
-                .run();
-            }
-          } else {
-            // Legacy rows linked via debts.sale_id
-            t.update(debts)
-              .set({ status: "cancelled", updatedAt: new Date().toISOString() })
-              .where(eq(debts.saleId, sale.id))
-              .run();
-          }
-        }
+        reverseSaleEffects(t, sale);
       });
       return db.select().from(sales).where(eq(sales.id, sale.id)).get()!;
     }),
+
+  // Owner corrections: fix a transaction's payment method, status or customer
+  // details without touching the database by hand. Setting status to
+  // "cancelled" performs the full void (stock restored, debt reduced).
+  update: adminQuery
+    .input(
+      z.object({
+        id: z.number().int(),
+        paymentMethod: z.enum(["cash", "megapay", "split", "debt"]).optional(),
+        status: z
+          .enum(["completed", "pending", "failed", "cancelled"])
+          .optional(),
+        customerName: z.string().max(80).nullable().optional(),
+        customerPhone: z.string().max(30).nullable().optional(),
+      }),
+    )
+    .mutation(({ input }) => {
+      const db = getDb();
+      const sale = db.select().from(sales).where(eq(sales.id, input.id)).get();
+      if (!sale) throw new TRPCError({ code: "NOT_FOUND" });
+      if (
+        sale.debtId &&
+        input.paymentMethod &&
+        input.paymentMethod !== sale.paymentMethod
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This sale is linked to a customer debt — void or delete it instead of changing the payment method.",
+        });
+      }
+      db.transaction((t) => {
+        const cancelling =
+          input.status === "cancelled" && sale.status !== "cancelled";
+        t.update(sales)
+          .set({
+            ...(input.paymentMethod
+              ? { paymentMethod: input.paymentMethod }
+              : {}),
+            ...(input.status ? { status: input.status } : {}),
+            ...(input.customerName !== undefined
+              ? { customerName: input.customerName }
+              : {}),
+            ...(input.customerPhone !== undefined
+              ? { customerPhone: input.customerPhone }
+              : {}),
+          })
+          .where(eq(sales.id, sale.id))
+          .run();
+        if (cancelling) reverseSaleEffects(t, sale);
+      });
+      return db.select().from(sales).where(eq(sales.id, input.id)).get()!;
+    }),
+
+  // Permanently delete a transaction: stock goes back on the shelf, any linked
+  // debt is reduced (and removed entirely if it drops to zero with no
+  // payments), and the sale disappears from reports.
+  remove: adminQuery
+    .input(z.object({ id: z.number().int() }))
+    .mutation(({ input }) => {
+      const db = getDb();
+      const sale = db.select().from(sales).where(eq(sales.id, input.id)).get();
+      if (!sale) throw new TRPCError({ code: "NOT_FOUND" });
+      db.transaction((t) => {
+        if (sale.status !== "cancelled" && sale.status !== "failed") {
+          reverseSaleEffects(t, sale);
+        }
+        // Clear the legacy debts.sale_id back-link so the sale row can go.
+        t.update(debts)
+          .set({ saleId: null, updatedAt: new Date().toISOString() })
+          .where(eq(debts.saleId, sale.id))
+          .run();
+        t.delete(saleItems).where(eq(saleItems.saleId, sale.id)).run();
+        t.delete(sales).where(eq(sales.id, sale.id)).run();
+        if (sale.debtId) {
+          const debt = t
+            .select()
+            .from(debts)
+            .where(eq(debts.id, sale.debtId))
+            .get();
+          if (debt && debt.amount === 0 && debt.amountPaid === 0) {
+            t.delete(debtPayments).where(eq(debtPayments.debtId, debt.id)).run();
+            t.delete(debts).where(eq(debts.id, debt.id)).run();
+          }
+        }
+      });
+      return { ok: true };
+    }),
 });
+
+// Undo a sale's side effects: put the stock back and pull the amount out of
+// the customer's debt tab.
+function reverseSaleEffects(
+  t: DbOrTx,
+  sale: { id: number; shop: string; status: string; paymentMethod: string; debtId: number | null; total: number },
+) {
+  if (sale.status === "completed" || sale.status === "pending") {
+    restockTx(t, sale);
+  }
+  if (sale.paymentMethod === "debt") {
+    if (sale.debtId) {
+      const debt = t.select().from(debts).where(eq(debts.id, sale.debtId)).get();
+      if (debt && debt.status !== "cancelled") {
+        const amount = Math.max(0, debt.amount - sale.total);
+        t.update(debts)
+          .set({
+            amount,
+            status: debtStatus(amount, debt.amountPaid),
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(debts.id, debt.id))
+          .run();
+      }
+    } else {
+      // Legacy rows linked via debts.sale_id
+      t.update(debts)
+        .set({ status: "cancelled", updatedAt: new Date().toISOString() })
+        .where(eq(debts.saleId, sale.id))
+        .run();
+    }
+  }
+}

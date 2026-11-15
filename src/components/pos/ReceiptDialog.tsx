@@ -37,6 +37,39 @@ function receiptDate(iso: string): string {
 
 const DASH = "--------------------------------";
 
+/**
+ * Print an exact-fit receipt: clone the receipt into the offscreen print
+ * root (76mm wide, so the height measurement matches print), size the page
+ * to the content so the printer feeds no blank paper, then print.
+ */
+function printThermalReceipt() {
+  const el = document.getElementById("receipt-print");
+  if (!el) {
+    window.print();
+    return;
+  }
+  let root = document.getElementById("thermal-print-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "thermal-print-root";
+    document.body.appendChild(root);
+  }
+  root.innerHTML = "";
+  const clone = el.cloneNode(true) as HTMLElement;
+  clone.removeAttribute("id");
+  root.appendChild(clone);
+  const heightMm =
+    Math.ceil((clone.getBoundingClientRect().height / 96) * 25.4) + 6;
+  const style = document.createElement("style");
+  style.textContent = `@page { size: 80mm ${heightMm}mm; margin: 0; }`;
+  document.head.appendChild(style);
+  window.print();
+  setTimeout(() => {
+    style.remove();
+    root.innerHTML = "";
+  }, 2000);
+}
+
 export function ReceiptDialog({
   saleId,
   open,
@@ -152,7 +185,7 @@ export function ReceiptDialog({
             <Button
               variant="outline"
               className="border-border"
-              onClick={() => window.print()}
+              onClick={printThermalReceipt}
             >
               <Printer className="size-4 mr-2" />
               Print receipt

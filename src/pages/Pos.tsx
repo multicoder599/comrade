@@ -39,6 +39,7 @@ import {
   ShoppingCart,
   Wallet,
   Database,
+  Store,
 } from "lucide-react";
 
 type PosView = "till" | "debts" | "recent" | "database";
@@ -204,12 +205,12 @@ export default function Pos() {
     catalogQuery.refetch();
   }
 
-  const navButton = (item: (typeof NAV_ITEMS)[number], compact: boolean) => (
+  const mobileNavButton = (item: (typeof NAV_ITEMS)[number]) => (
     <button
       key={item.key}
       type="button"
       onClick={() => setView(item.key)}
-      className={`flex ${compact ? "flex-row gap-1.5 px-3 py-2" : "flex-col gap-1 py-2.5"} items-center justify-center rounded-md text-xs font-medium transition-colors cursor-pointer ${
+      className={`flex flex-row gap-1.5 px-3 py-2 items-center justify-center rounded-md text-xs font-medium transition-colors cursor-pointer ${
         view === item.key
           ? "bg-primary/15 text-primary"
           : "text-muted-foreground hover:text-foreground hover:bg-secondary"
@@ -245,34 +246,49 @@ export default function Pos() {
       </header>
       {/* Mobile nav row */}
       <nav className="md:hidden grid grid-cols-4 gap-1 px-2 py-1.5 border-b border-border shrink-0">
-        {NAV_ITEMS.map((item) => navButton(item, true))}
+        {NAV_ITEMS.map((item) => mobileNavButton(item))}
       </nav>
 
       {/* Desktop left rail */}
-      <aside className="hidden md:flex w-20 shrink-0 border-r border-border bg-card/40 flex-col">
-        <div className="px-2 py-4 border-b border-border flex flex-col items-center gap-1.5 text-center">
-          <span className="size-2 rounded-full bg-primary shadow-[0_0_8px_hsl(var(--primary))]" />
-          <span className="font-display font-semibold tracking-tight text-[11px] leading-tight">
-            {settingsQuery.data?.businessName ?? "Comrade Shop"}
+      <aside className="hidden md:flex w-48 shrink-0 border-r border-border bg-card flex-col">
+        <div className="flex items-center gap-2.5 px-3.5 py-4 border-b border-border">
+          <span className="size-9 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0">
+            <Store className="size-4" strokeWidth={1.75} />
           </span>
-          <Badge
-            variant="outline"
-            className="border-primary/50 text-primary text-[9px] px-1.5 py-0"
-          >
-            {shopName}
-          </Badge>
+          <div className="min-w-0">
+            <p className="font-display font-semibold text-sm leading-tight truncate">
+              {settingsQuery.data?.businessName ?? "Comrade Shop"}
+            </p>
+            <p className="text-[11px] text-muted-foreground truncate">
+              {shopName}
+            </p>
+          </div>
         </div>
-        <nav className="flex-1 p-2 space-y-1">
-          {NAV_ITEMS.map((item) => navButton(item, false))}
+        <nav className="flex-1 p-2.5 space-y-1">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setView(item.key)}
+              className={`w-full flex items-center gap-2.5 rounded-md px-3 py-2.5 text-sm transition-colors cursor-pointer ${
+                view === item.key
+                  ? "bg-primary/15 text-primary font-semibold"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+              }`}
+            >
+              <item.icon className="size-4" strokeWidth={1.75} />
+              {item.label}
+            </button>
+          ))}
         </nav>
-        <div className="p-2 border-t border-border">
-          <p className="text-[10px] text-muted-foreground text-center mb-1.5 truncate">
+        <div className="p-2.5 border-t border-border space-y-1">
+          <p className="px-3 text-[11px] text-muted-foreground truncate">
             {user.displayName}
           </p>
           <button
             type="button"
             onClick={logout}
-            className="w-full flex flex-col items-center gap-1 rounded-md py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer"
+            className="w-full flex items-center gap-2.5 rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
           >
             <LogOut className="size-4" strokeWidth={1.75} />
             Log out
