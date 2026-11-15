@@ -501,8 +501,7 @@ export default function Pos() {
         open={checkoutOpen}
         onOpenChange={setCheckoutOpen}
         tab={cart.active}
-        shop={shop}
-        megapayEnabled={shop === "A" && (settingsQuery.data?.megapayConfigured ?? false)}
+        megapayEnabled={settingsQuery.data?.megapayConfigured ?? false}
         onCompleted={completeSale}
         onPending={(pending) => {
           cart.setPending(cart.active.id, pending);

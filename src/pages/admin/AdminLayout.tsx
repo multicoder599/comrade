@@ -139,7 +139,7 @@ export default function AdminLayout() {
 
         {/* Content */}
         <main className="flex-1 min-w-0 overflow-y-auto">
-          <div className="max-w-6xl mx-auto p-4 md:p-6">
+          <div className="w-full p-4 md:p-6">
             <Outlet context={{ settings: settingsQuery.data }} />
           </div>
         </main>

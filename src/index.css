@@ -69,18 +69,19 @@
   }
 }
 
-/* Receipt print styles — 80mm thermal paper. Zero page margin also removes
-   the browser's printed header/footer (date, title, URL, page numbers). */
+/* Receipt print styles — 80mm thermal paper. Zero page margin removes the
+   browser's printed header/footer (date, title, URL, page numbers) on EVERY
+   print, even a manual Ctrl+P. While a receipt is on screen, ReceiptDialog
+   injects an exact-fit page size plus the rule that hides everything except
+   the receipt clone, so ordinary pages still print normally. */
 @page {
-  /* Fallback page — ReceiptDialog measures the receipt and injects an
-     exact-fit page size at print time so no thermal paper is wasted. */
-  size: 80mm 297mm;
   margin: 0;
 }
 /* The receipt is cloned into this root for printing: it lives offscreen on
    screen (so its height is measurable) and becomes the only visible element
-   on the page when printing. This bypasses the dialog's centered/transformed
-   positioning, which would otherwise push the receipt down the page. */
+   on the page when printing (via the injected style). This bypasses the
+   dialog's centered/transformed positioning, which would otherwise push the
+   receipt down the page. */
 #thermal-print-root {
   position: absolute;
   left: -10000px;
@@ -88,24 +89,4 @@
   width: 76mm;
   background: #fff;
   color: #000;
-}
-@media print {
-  body > *:not(#thermal-print-root) {
-    display: none !important;
-  }
-  html,
-  body {
-    width: 80mm;
-    background: #fff !important;
-  }
-  #thermal-print-root {
-    left: 0;
-    padding: 2mm 1mm;
-  }
-  #thermal-print-root > div {
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    background: #fff !important;
-    color: #000 !important;
-  }
 }

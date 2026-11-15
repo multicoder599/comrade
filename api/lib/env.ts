@@ -25,11 +25,16 @@ export const env = {
   // Secret used to sign login tokens. MUST be overridden on the VPS.
   jwtSecret: process.env.JWT_SECRET || "comrade-shop-dev-secret",
 
-  // MegaPay (megapay.co.ke) M-Pesa STK Push credentials — Shop A payments.
+  // MegaPay (megapay.co.ke) M-Pesa STK Push credentials — both shops prompt
+  // through the same MegaPay account.
   megapay: {
     apiKey: process.env.MEGAPAY_API_KEY || "",
     email: process.env.MEGAPAY_EMAIL || "",
     baseUrl: process.env.MEGAPAY_BASE_URL || "https://megapay.co.ke/backend/v1",
+    // Where MegaPay posts the payment result. Must be publicly reachable.
+    callbackUrl:
+      process.env.MEGAPAY_CALLBACK_URL ||
+      "http://169.58.58.133:5105/api/megapay/callback",
   },
 };
 

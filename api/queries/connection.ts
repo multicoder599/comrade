@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sales (
   customer_phone TEXT,
   debt_id INTEGER,
   mpesa_request_id TEXT,
+  mpesa_reference TEXT,
   mpesa_receipt TEXT,
   created_at TEXT NOT NULL
 );
@@ -168,6 +169,7 @@ function migrateSalesTable(sqlite: Database.Database) {
         customer_phone TEXT,
         debt_id INTEGER,
         mpesa_request_id TEXT,
+        mpesa_reference TEXT,
         mpesa_receipt TEXT,
         created_at TEXT NOT NULL
       );
@@ -175,13 +177,13 @@ function migrateSalesTable(sqlite: Database.Database) {
         id, receipt_no, shop, cashier_id, cashier_name, mode, payment_method,
         status, subtotal, discount, total, tendered, change, cash_amount,
         mpesa_amount, customer_name, customer_phone, debt_id,
-        mpesa_request_id, mpesa_receipt, created_at
+        mpesa_request_id, mpesa_reference, mpesa_receipt, created_at
       )
       SELECT
         id, receipt_no, shop, cashier_id, cashier_name, mode, payment_method,
         status, subtotal, discount, total, tendered, change, cash_amount,
         mpesa_amount, customer_name, customer_phone, debt_id,
-        mpesa_request_id, mpesa_receipt, created_at
+        mpesa_request_id, mpesa_reference, mpesa_receipt, created_at
       FROM sales;
       DROP TABLE sales;
       ALTER TABLE sales_new RENAME TO sales;
@@ -246,6 +248,7 @@ function migrate(sqlite: Database.Database) {
   ensureColumn(sqlite, "sales", "cash_amount", "cash_amount INTEGER");
   ensureColumn(sqlite, "sales", "mpesa_amount", "mpesa_amount INTEGER");
   ensureColumn(sqlite, "sales", "debt_id", "debt_id INTEGER");
+  ensureColumn(sqlite, "sales", "mpesa_reference", "mpesa_reference TEXT");
   migrateSalesTable(sqlite);
   migrateDebtPaymentsTable(sqlite);
   sqlite.exec(

@@ -52,6 +52,12 @@ export default defineConfig({
       workbox: {
         // Never cache HTML or API responses — the till must always be live.
         navigateFallback: null,
+        // Take over immediately after a deploy: the new service worker
+        // activates without waiting for all tabs to close, and old precaches
+        // are wiped so stale CSS/JS can never linger on the tills.
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,

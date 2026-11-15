@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -37,37 +38,60 @@ function receiptDate(iso: string): string {
 
 const DASH = "--------------------------------";
 
+const PRINT_STYLE_ID = "thermal-print-style";
+
 /**
- * Print an exact-fit receipt: clone the receipt into the offscreen print
- * root (76mm wide, so the height measurement matches print), size the page
- * to the content so the printer feeds no blank paper, then print.
+ * Prepare the receipt for printing: clone it into the offscreen print root
+ * (76mm wide, so the height measurement matches print) and inject an
+ * exact-fit @page size so the printer feeds no blank paper. Runs as soon as
+ * the receipt is shown — NOT only when the Print button is clicked — so a
+ * manual Ctrl+P / browser menu print produces the same clean receipt. The
+ * injected style also hides everything except the clone and sets margin 0,
+ * which removes the browser's date / title / URL / page-number stamps.
  */
-function printThermalReceipt() {
-  const el = document.getElementById("receipt-print");
-  if (!el) {
-    window.print();
-    return;
-  }
-  let root = document.getElementById("thermal-print-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "thermal-print-root";
-    document.body.appendChild(root);
-  }
-  root.innerHTML = "";
-  const clone = el.cloneNode(true) as HTMLElement;
-  clone.removeAttribute("id");
-  root.appendChild(clone);
-  const heightMm =
-    Math.ceil((clone.getBoundingClientRect().height / 96) * 25.4) + 6;
-  const style = document.createElement("style");
-  style.textContent = `@page { size: 80mm ${heightMm}mm; margin: 0; }`;
-  document.head.appendChild(style);
-  window.print();
-  setTimeout(() => {
-    style.remove();
-    root.innerHTML = "";
-  }, 2000);
+function useThermalPrintSetup(key: string | null) {
+  useEffect(() => {
+    if (!key) return;
+    const raf = requestAnimationFrame(() => {
+      const el = document.getElementById("receipt-print");
+      if (!el) return;
+      let root = document.getElementById("thermal-print-root");
+      if (!root) {
+        root = document.createElement("div");
+        root.id = "thermal-print-root";
+        document.body.appendChild(root);
+      }
+      root.innerHTML = "";
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.removeAttribute("id");
+      root.appendChild(clone);
+      const heightMm =
+        Math.ceil((clone.getBoundingClientRect().height / 96) * 25.4) + 6;
+      document.getElementById(PRINT_STYLE_ID)?.remove();
+      const style = document.createElement("style");
+      style.id = PRINT_STYLE_ID;
+      style.textContent = `
+        @page { size: 80mm ${heightMm}mm; margin: 0; }
+        @media print {
+          body > *:not(#${"thermal-print-root"}) { display: none !important; }
+          html, body { width: 80mm; background: #fff !important; }
+          #thermal-print-root { left: 0; padding: 2mm 1mm; }
+          #thermal-print-root > div {
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            background: #fff !important;
+            color: #000 !important;
+          }
+        }`;
+      document.head.appendChild(style);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      document.getElementById(PRINT_STYLE_ID)?.remove();
+      const root = document.getElementById("thermal-print-root");
+      if (root) root.innerHTML = "";
+    };
+  }, [key]);
 }
 
 export function ReceiptDialog({
@@ -93,6 +117,11 @@ export function ReceiptDialog({
         ? settingsQuery.data?.shopAName ?? "Shop A"
         : settingsQuery.data?.shopBName ?? "Shop B"
       : "");
+  // Clone + exact-fit page size are ready the moment the receipt (including
+  // the resolved shop name) is rendered, so any print path is clean.
+  useThermalPrintSetup(
+    open && data ? `${data.sale.id}:${resolvedShopName}` : null,
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -185,7 +214,7 @@ export function ReceiptDialog({
             <Button
               variant="outline"
               className="border-border"
-              onClick={printThermalReceipt}
+              onClick={() => window.print()}
             >
               <Printer className="size-4 mr-2" />
               Print receipt

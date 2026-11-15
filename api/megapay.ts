@@ -28,7 +28,10 @@ export function normalizeMsisdn(phone: string): string {
 }
 
 type InitiateResponse = {
-  success?: string | number;
+  success?: string | number | boolean;
+  status?: string | number | boolean;
+  ResponseCode?: string | number;
+  errorMessage?: string;
   massage?: string;
   message?: string;
   transaction_request_id?: string;
@@ -39,6 +42,7 @@ export async function initiateStkPush(input: {
   amountKes: number; // whole KES (MegaPay takes a plain amount)
   phone: string;
   reference: string;
+  description: string;
 }): Promise<{ requestId: string; message: string }> {
   if (!megapayConfigured()) {
     throw new MegaPayError(
@@ -57,9 +61,11 @@ export async function initiateStkPush(input: {
         email: env.megapay.email,
         amount: input.amountKes,
         msisdn,
+        callback_url: env.megapay.callbackUrl,
+        description: input.description,
         reference: input.reference,
       }),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(35_000),
     });
   } catch (err) {
     log.error("megapay initiatestk network error", {
@@ -69,16 +75,25 @@ export async function initiateStkPush(input: {
   }
 
   const data = (await res.json().catch(() => ({}))) as InitiateResponse;
-  const requestId = data.transaction_request_id;
-  if (!res.ok || !requestId) {
+  // MegaPay's success shape has varied over time — only treat EXPLICIT
+  // failures as rejections (mirrors the shop's proven Stallion integration).
+  const rejected =
+    !res.ok ||
+    data.status === false ||
+    data.success === false ||
+    String(data.ResponseCode ?? "") === "1";
+  if (rejected) {
     log.error("megapay initiatestk rejected", { status: res.status });
     throw new MegaPayError(
-      data.massage || data.message || data.ResponseDescription ||
+      data.errorMessage || data.massage || data.message ||
+        data.ResponseDescription ||
         "MegaPay rejected the request. Check your API key and email.",
     );
   }
+  // If MegaPay didn't hand back a request id, fall back to our own reference —
+  // the webhook matches on the reference / phone + amount in that case.
   return {
-    requestId,
+    requestId: data.transaction_request_id || input.reference,
     message: data.massage || data.message || "STK push sent to customer phone.",
   };
 }
@@ -134,12 +149,14 @@ export async function checkTransactionStatus(
   if (code === 0 || data.status === "success") {
     return { state: "success", receipt: data.TransactionReceipt };
   }
-  if (Number.isFinite(code) && code !== 0) {
-    return {
-      state: "failed",
-      reason:
-        FAILURE_CODES[code] || data.ResponseDescription || "Payment failed",
-    };
+  // 500100 = Safaricom is still waiting for the customer's PIN — and any
+  // unknown/absent code means we simply don't know yet. Keep polling.
+  if (code === 500100 || !Number.isFinite(code)) {
+    return { state: "pending" };
   }
-  return { state: "pending" };
+  return {
+    state: "failed",
+    reason:
+      FAILURE_CODES[code] || data.ResponseDescription || "Payment failed",
+  };
 }

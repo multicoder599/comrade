@@ -37,6 +37,9 @@ const cashierProductInput = z.object({
   unit: z.string().min(1).max(20).default("pc"),
   retailPrice: z.number().int().min(0),
   wholesalePrice: z.number().int().min(0).default(0),
+  // Optional cost price — set it so profit counts correctly from day one;
+  // the admin can still change it later.
+  buyingPrice: z.number().int().min(0).default(0),
   initialStock: z.number().min(0).default(0),
 });
 
@@ -136,8 +139,9 @@ export const productsRouter = createRouter({
   }),
 
   // Till-side product creation: cashier adds the item with its selling price
-  // and opening stock for their own shop. Buying price starts at 0 — the
-  // admin fills in the real cost price later.
+  // and opening stock for their own shop. Buying price is optional (default
+  // 0) — when given, profit reports are correct from the first sale; the
+  // admin can adjust it later.
   cashierCreate: authedQuery
     .input(cashierProductInput)
     .mutation(({ ctx, input }) => {
@@ -165,7 +169,7 @@ export const productsRouter = createRouter({
             name: input.name.trim(),
             category: input.category.trim() || "General",
             unit: input.unit.trim() || "pc",
-            buyingPrice: 0,
+            buyingPrice: input.buyingPrice,
             retailPrice: input.retailPrice,
             wholesalePrice: input.wholesalePrice,
             wholesaleMinQty: 1,

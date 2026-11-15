@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { trpc } from "@/providers/trpc";
+import { CategorySelect } from "@/components/CategorySelect";
 import { useAuth } from "@/lib/auth";
 import { errorMessage } from "@/lib/auth";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
@@ -49,6 +50,7 @@ export function CashierDbView() {
     unit: "pc",
     retail: "",
     wholesale: "",
+    buying: "",
     stock: "",
   });
   const [createError, setCreateError] = useState<string | null>(null);
@@ -80,6 +82,7 @@ export function CashierDbView() {
         unit: "pc",
         retail: "",
         wholesale: "",
+        buying: "",
         stock: "",
       });
       setCreateError(null);
@@ -111,6 +114,9 @@ export function CashierDbView() {
     const wholesalePrice = newProduct.wholesale.trim()
       ? parseKes(newProduct.wholesale)
       : 0;
+    const buyingPrice = newProduct.buying.trim()
+      ? parseKes(newProduct.buying)
+      : 0;
     if (!newProduct.name.trim() || !newProduct.code.trim()) {
       setCreateError("Name and barcode/SKU are required");
       return;
@@ -119,8 +125,8 @@ export function CashierDbView() {
       setCreateError("Enter a valid retail price");
       return;
     }
-    if (wholesalePrice === null) {
-      setCreateError("Enter a valid wholesale price (or leave it empty)");
+    if (wholesalePrice === null || buyingPrice === null) {
+      setCreateError("Enter valid prices (or leave the optional ones empty)");
       return;
     }
     createProduct.mutate({
@@ -130,6 +136,7 @@ export function CashierDbView() {
       unit: newProduct.unit.trim() || "pc",
       retailPrice,
       wholesalePrice,
+      buyingPrice,
       initialStock: Number(newProduct.stock) || 0,
     });
   }
@@ -173,7 +180,7 @@ export function CashierDbView() {
           )}
         </div>
 
-        {/* Add new product — buying price is set later by the admin */}
+        {/* Add new product — only name, code and retail price are required */}
         <div className="rounded-lg border border-border bg-card p-4 space-y-3">
           <p className="micro-label flex items-center gap-1.5">
             <Plus className="size-3.5" /> Add new product
@@ -198,22 +205,14 @@ export function CashierDbView() {
                 className="pl-8 bg-background border-input h-9 text-sm font-figures"
               />
             </div>
-            <div>
-              <Input
-                placeholder="Category"
-                list="cashier-categories"
-                value={newProduct.category}
-                onChange={(e) =>
-                  setNewProduct((s) => ({ ...s, category: e.target.value }))
-                }
-                className="bg-background border-input h-9 text-sm"
-              />
-              <datalist id="cashier-categories">
-                {categories.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-            </div>
+            <CategorySelect
+              value={newProduct.category}
+              categories={categories}
+              onChange={(category) =>
+                setNewProduct((s) => ({ ...s, category }))
+              }
+              className="bg-background border-input h-9 text-sm"
+            />
             <Input
               placeholder="Unit (pc / kg)"
               value={newProduct.unit}
@@ -241,6 +240,15 @@ export function CashierDbView() {
               className="bg-background border-input h-9 text-sm font-figures"
             />
             <Input
+              placeholder="Buying price (optional)"
+              inputMode="decimal"
+              value={newProduct.buying}
+              onChange={(e) =>
+                setNewProduct((s) => ({ ...s, buying: e.target.value }))
+              }
+              className="bg-background border-input h-9 text-sm font-figures"
+            />
+            <Input
               placeholder="Opening stock qty"
               inputMode="decimal"
               value={newProduct.stock}
@@ -257,7 +265,8 @@ export function CashierDbView() {
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                The admin sets the buying price later from the admin panel.
+                Category, wholesale & buying price are optional — set the buying
+                price now so profit counts correctly, or the admin can set it later.
               </p>
             )}
             <Button

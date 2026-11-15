@@ -112,12 +112,6 @@ export const salesRouter = createRouter({
       }
       const needsMpesa =
         input.paymentMethod === "megapay" || input.paymentMethod === "split";
-      if (needsMpesa && shop !== "A") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "MegaPay is only enabled for Shop A",
-        });
-      }
       if (
         input.paymentMethod === "debt" &&
         (!input.customerName?.trim() || !input.customerPhone?.trim())
@@ -193,6 +187,7 @@ export const salesRouter = createRouter({
           cashAmount?: number | null;
           mpesaAmount?: number | null;
           mpesaRequestId?: string | null;
+          mpesaReference?: string | null;
           debtId?: number | null;
         },
       ): number {
@@ -217,6 +212,7 @@ export const salesRouter = createRouter({
             customerPhone: input.customerPhone?.trim() || null,
             debtId: fields.debtId ?? null,
             mpesaRequestId: fields.mpesaRequestId ?? null,
+            mpesaReference: fields.mpesaReference ?? null,
           })
           .run();
         const id = Number(info.lastInsertRowid);
@@ -349,6 +345,7 @@ export const salesRouter = createRouter({
             amountKes: Math.max(1, Math.round(mpesaPart / 100)),
             phone: input.customerPhone ?? "",
             reference,
+            description: `Comrade Shop ${shop} Checkout`,
           });
         } catch (err) {
           throw new TRPCError({
@@ -365,6 +362,7 @@ export const salesRouter = createRouter({
             cashAmount: input.paymentMethod === "split" ? cashPart : null,
             mpesaAmount: mpesaPart,
             mpesaRequestId: push.requestId,
+            mpesaReference: reference,
           }),
         );
         const sale = db.select().from(sales).where(eq(sales.id, saleId)).get()!;

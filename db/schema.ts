@@ -86,6 +86,9 @@ export const sales = sqliteTable("sales", {
   // Set on debt sales: the customer's running debt tab this sale belongs to.
   debtId: integer("debt_id"),
   mpesaRequestId: text("mpesa_request_id"),
+  // Our own reference sent with the STK push (e.g. COMRADE-A-1718…) — the
+  // webhook matches on it when MegaPay doesn't return the request id.
+  mpesaReference: text("mpesa_reference"),
   mpesaReceipt: text("mpesa_receipt"),
   createdAt: text("created_at")
     .notNull()

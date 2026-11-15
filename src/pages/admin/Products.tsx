@@ -19,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { trpc } from "@/providers/trpc";
+import { CategorySelect } from "@/components/CategorySelect";
 import { errorMessage } from "@/lib/auth";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
 import { Plus, Pencil, Search, Trash2 } from "lucide-react";
@@ -109,6 +110,10 @@ export default function Products() {
   const rows = useMemo(
     () => (listQuery.data ?? []) as ProductRow[],
     [listQuery.data],
+  );
+  const categories = useMemo(
+    () => [...new Set(rows.map((p) => p.category))].sort(),
+    [rows],
   );
 
   function openCreate() {
@@ -346,10 +351,11 @@ export default function Products() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Category</Label>
-              <Input
+              <Label>Category (optional)</Label>
+              <CategorySelect
                 value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                categories={categories}
+                onChange={(category) => setForm({ ...form, category })}
                 className="bg-background border-input"
               />
             </div>

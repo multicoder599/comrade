@@ -1,51 +1,129 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { saleItems, sales, stocks } from "@db/schema";
 import { and, sql } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { log } from "../lib/logger";
 
 // MegaPay webhook — receives the payment result after an STK push.
-// Set this URL in your MegaPay account (Account Settings → Webhook):
-//   http://169.58.58.133:5105/api/megapay/callback
+// The STK payload sends MegaPay our callback_url (MEGAPAY_CALLBACK_URL,
+// default http://169.58.58.133:5105/api/megapay/callback).
+//
+// Payload parsing and match fallbacks mirror the shop's proven Stallion
+// Minimart integration: MegaPay's field names have varied over time, so we
+// accept every variant seen in the wild and match by (1) request id,
+// (2) our reference, (3) phone + amount within a 10-minute window.
 
 export const megapayRoutes = new Hono();
 
-type WebhookPayload = {
-  ResponseCode?: number | string;
-  ResponseDescription?: string;
-  TransactionID?: string; // = transaction_request_id from initiatestk
-  TransactionReceipt?: string;
-  Msisdn?: string;
-  TransactionAmount?: number;
-};
+type WebhookPayload = Record<string, unknown>;
+
+function str(v: unknown): string {
+  return v === undefined || v === null ? "" : String(v);
+}
 
 megapayRoutes.post("/callback", async (c) => {
-  const body = (await c.req.json().catch(() => null)) as WebhookPayload | null;
-  if (!body?.TransactionID) {
-    return c.json({ ok: false, error: "missing TransactionID" }, 400);
+  let data: WebhookPayload | null = await c.req.json().catch(() => null);
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data) as WebhookPayload;
+    } catch {
+      data = null;
+    }
   }
+  if (!data || Object.keys(data).length === 0) {
+    return c.json({ ok: false, error: "empty body" }, 400);
+  }
+
+  const responseCode =
+    data.ResponseCode !== undefined
+      ? str(data.ResponseCode)
+      : data.ResultCode !== undefined
+        ? str(data.ResultCode)
+        : "";
+  const amount = parseFloat(
+    str(data.TransactionAmount || data.amount || data.Amount || "0"),
+  );
+  const receipt =
+    str(
+      data.TransactionReceipt || data.MpesaReceiptNumber || data.receipt,
+    ) || null;
+  const phoneRaw = str(
+    data.Msisdn || data.phone || data.PhoneNumber || data.msisdn,
+  );
+  const last9 = phoneRaw.replace(/\D/g, "").slice(-9);
+  const reference = str(
+    data.reference ||
+      data.Reference ||
+      data.TransactionReference ||
+      data.BillRefNumber,
+  );
+  const transactionId = str(data.TransactionID);
+
   const db = getDb();
-  const sale = db
-    .select()
-    .from(sales)
-    .where(eq(sales.mpesaRequestId, body.TransactionID))
-    .get();
+
+  // --- Match the pending sale ---
+  let sale = transactionId
+    ? db.select().from(sales).where(eq(sales.mpesaRequestId, transactionId)).get()
+    : undefined;
+  if (!sale && reference) {
+    sale = db
+      .select()
+      .from(sales)
+      .where(eq(sales.mpesaReference, reference))
+      .get();
+    // Older rows stored our reference in mpesa_request_id (no request id came
+    // back from initiatestk).
+    if (!sale) {
+      sale = db
+        .select()
+        .from(sales)
+        .where(eq(sales.mpesaRequestId, reference))
+        .get();
+    }
+  }
+  if (!sale && last9 && amount > 0) {
+    const candidates = db
+      .select()
+      .from(sales)
+      .where(
+        and(
+          eq(sales.status, "pending"),
+          inArray(sales.paymentMethod, ["megapay", "split"]),
+        ),
+      )
+      .orderBy(desc(sales.id))
+      .limit(20)
+      .all();
+    const now = Date.now();
+    sale = candidates.find((s) => {
+      if (now - Date.parse(s.createdAt) > 10 * 60 * 1000) return false;
+      const phone = (s.customerPhone ?? "").replace(/\D/g, "");
+      return (
+        phone.endsWith(last9) &&
+        Math.abs((s.mpesaAmount ?? 0) / 100 - amount) < 0.01
+      );
+    });
+  }
+
   if (!sale) {
-    log.info("megapay webhook for unknown transaction", {});
+    log.info("megapay webhook: no matching sale", { reference, receipt });
     return c.json({ ok: true }); // ack anyway so MegaPay stops retrying
   }
   if (sale.status !== "pending") {
     return c.json({ ok: true }); // already settled (poll or earlier webhook)
   }
 
-  const code = Number(body.ResponseCode);
-  if (code === 0) {
+  if (responseCode === "0") {
     db.update(sales)
-      .set({ status: "completed", mpesaReceipt: body.TransactionReceipt ?? null })
+      .set({ status: "completed", mpesaReceipt: receipt })
       .where(eq(sales.id, sale.id))
       .run();
-    log.info("megapay webhook: sale completed", { saleId: sale.id });
+    log.info("megapay webhook: sale completed", {
+      saleId: sale.id,
+      shop: sale.shop,
+      receipt,
+    });
   } else {
     db.transaction((t) => {
       t.update(sales).set({ status: "failed" }).where(eq(sales.id, sale.id)).run();
@@ -57,7 +135,11 @@ megapayRoutes.post("/callback", async (c) => {
           .run();
       }
     });
-    log.info("megapay webhook: sale failed", { saleId: sale.id, code });
+    log.info("megapay webhook: sale failed", {
+      saleId: sale.id,
+      shop: sale.shop,
+      code: responseCode,
+    });
   }
   return c.json({ ok: true });
 });

@@ -33,7 +33,6 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   tab: CartTab;
-  shop: "A" | "B";
   megapayEnabled: boolean;
   onCompleted: (result: CompletedSale) => void;
   /** M-Pesa STK push sent — the cart keeps waiting in the background. */
@@ -52,7 +51,6 @@ export function CheckoutDialog({
   open,
   onOpenChange,
   tab,
-  shop,
   megapayEnabled,
   onCompleted,
   onPending,
@@ -144,7 +142,7 @@ export function CheckoutDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-card border-border sm:max-w-md">
+      <DialogContent className="bg-card border-border w-[calc(100vw-1.5rem)] sm:max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle className="font-display">Checkout — {tab.label}</DialogTitle>
           <DialogDescription className="sr-only">
@@ -152,80 +150,71 @@ export function CheckoutDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="rounded-md border border-border bg-secondary/60 px-4 py-3 flex items-baseline justify-between">
-          <span className="micro-label">Total due</span>
-          <span className="font-figures text-2xl font-semibold">
+        <div className="rounded-md border border-border bg-secondary/60 px-4 py-3 flex items-baseline justify-between gap-3">
+          <span className="micro-label shrink-0">Total due</span>
+          <span className="font-figures text-2xl font-semibold truncate">
             {formatKes(total)}
           </span>
         </div>
 
         {phase.step === "choose" && (
-          <div className="grid gap-2.5">
+          <div className="grid gap-2.5 min-w-0">
             <Button
               variant="outline"
-              className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+              className="h-auto min-h-13 w-full min-w-0 justify-start gap-3 border-border hover:bg-secondary py-2.5"
               onClick={() => setPhase({ step: "cash" })}
             >
               <Banknote className="size-5 text-primary shrink-0" />
-              <span className="text-left">
+              <span className="text-left min-w-0">
                 <span className="block font-semibold">Cash</span>
-                <span className="block text-xs text-muted-foreground">
+                <span className="block text-xs text-muted-foreground whitespace-normal break-words">
                   Take money, give change
                 </span>
               </span>
             </Button>
-            {shop === "A" && (
-              <>
-                <Button
-                  variant="outline"
-                  className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
-                  onClick={() => setPhase({ step: "mpesa" })}
-                  disabled={!megapayEnabled}
-                  title={mpesaNote}
-                >
-                  <Smartphone className="size-5 text-primary shrink-0" />
-                  <span className="text-left">
-                    <span className="block font-semibold">M-Pesa</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {mpesaNote} — you can serve other carts while you wait
-                    </span>
-                  </span>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
-                  onClick={() => setPhase({ step: "split" })}
-                  disabled={!megapayEnabled}
-                  title={mpesaNote}
-                >
-                  <Split className="size-5 text-primary shrink-0" />
-                  <span className="text-left">
-                    <span className="block font-semibold">Split · Cash + M-Pesa</span>
-                    <span className="block text-xs text-muted-foreground">
-                      Part cash now, the rest by M-Pesa prompt
-                    </span>
-                  </span>
-                </Button>
-              </>
-            )}
             <Button
               variant="outline"
-              className="h-13 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+              className="h-auto min-h-13 w-full min-w-0 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+              onClick={() => setPhase({ step: "mpesa" })}
+              disabled={!megapayEnabled}
+              title={mpesaNote}
+            >
+              <Smartphone className="size-5 text-primary shrink-0" />
+              <span className="text-left min-w-0">
+                <span className="block font-semibold">M-Pesa</span>
+                <span className="block text-xs text-muted-foreground whitespace-normal break-words">
+                  {mpesaNote} — you can serve other carts while you wait
+                </span>
+              </span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto min-h-13 w-full min-w-0 justify-start gap-3 border-border hover:bg-secondary py-2.5"
+              onClick={() => setPhase({ step: "split" })}
+              disabled={!megapayEnabled}
+              title={mpesaNote}
+            >
+              <Split className="size-5 text-primary shrink-0" />
+              <span className="text-left min-w-0">
+                <span className="block font-semibold">Split · Cash + M-Pesa</span>
+                <span className="block text-xs text-muted-foreground whitespace-normal break-words">
+                  Part cash now, the rest by M-Pesa prompt
+                </span>
+              </span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto min-h-13 w-full min-w-0 justify-start gap-3 border-border hover:bg-secondary py-2.5"
               onClick={() => setPhase({ step: "debt" })}
             >
               <BookUser className="size-5 text-primary shrink-0" />
-              <span className="text-left">
+              <span className="text-left min-w-0">
                 <span className="block font-semibold">Debt · Pay later</span>
-                <span className="block text-xs text-muted-foreground">
+                <span className="block text-xs text-muted-foreground whitespace-normal break-words">
                   Record the customer's name & phone — collect later
                 </span>
               </span>
             </Button>
-            {shop === "B" && (
-              <p className="text-xs text-muted-foreground text-center">
-                M-Pesa prompts are enabled for Shop A only.
-              </p>
-            )}
           </div>
         )}
 
