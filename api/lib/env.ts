@@ -16,7 +16,7 @@ export const env = {
 
   // Shown on the login screen and admin Settings so it's easy to confirm
   // what's actually deployed.
-  appVersion: "1.5.0",
+  appVersion: "1.6.0",
   // Changes on every server start — the tills poll it to detect a redeploy
   // and offer a one-tap refresh (kills stale-cache confusion).
   bootId: `${Date.now()}`,

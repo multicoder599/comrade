@@ -3,6 +3,14 @@ import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
 import { usePortGuard } from "@/lib/ports";
 import { trpc } from "@/providers/trpc";
@@ -70,6 +78,7 @@ export default function Pos() {
   const [category, setCategory] = useState<string | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [receiptSaleId, setReceiptSaleId] = useState<number | null>(null);
+  const [pricePrompt, setPricePrompt] = useState<CatalogProduct | null>(null);
   const [scanText, setScanText] = useState("");
   const [scanNotice, setScanNotice] = useState<string | null>(null);
   const scanInputRef = useRef<HTMLInputElement>(null);
@@ -369,7 +378,7 @@ export default function Pos() {
                         key={p.id}
                         type="button"
                         disabled={out}
-                        onClick={() => cart.addProduct(p)}
+                        onClick={() => setPricePrompt(p)}
                         className={`text-left rounded-md border p-3 transition-colors cursor-pointer ${
                           out
                             ? "border-border bg-card/50 opacity-45 cursor-not-allowed"
@@ -498,6 +507,14 @@ export default function Pos() {
         </div>
       )}
 
+      <AddPriceDialog
+        product={pricePrompt}
+        onClose={() => setPricePrompt(null)}
+        onAdd={(product, opts) => {
+          cart.addProduct(product, opts);
+          setPricePrompt(null);
+        }}
+      />
       <CheckoutDialog
         open={checkoutOpen}
         onOpenChange={setCheckoutOpen}
@@ -768,6 +785,7 @@ function CartLineRow({
   onRemove: () => void;
 }) {
   const [priceText, setPriceText] = useState<string | null>(null);
+  const [qtyText, setQtyText] = useState<string | null>(null);
   const bargained = line.unitPrice !== line.listPrice;
 
   return (
@@ -795,9 +813,20 @@ function CartLineRow({
             onClick={() => onQty(Math.max(1, line.qty - 1))}
             icon={<Minus className="size-3" />}
           />
-          <span className="w-7 text-center font-figures text-xs">
-            {formatQty(line.qty)}
-          </span>
+          {/* Typeable quantity — the +/- buttons still work alongside it */}
+          <Input
+            aria-label={`Quantity for ${line.name}`}
+            className="w-12 h-6 px-1 bg-background border-input font-figures text-xs text-center"
+            inputMode="decimal"
+            value={qtyText ?? formatQty(line.qty)}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => {
+              setQtyText(e.target.value);
+              const v = parseQty(e.target.value);
+              if (v !== null) onQty(v);
+            }}
+            onBlur={() => setQtyText(null)}
+          />
           <QtyButton
             aria-label="Increase quantity"
             onClick={() => onQty(line.qty + 1)}
@@ -861,6 +890,168 @@ function CartLineRow({
         </div>
       </div>
     </li>
+  );
+}
+
+/** Parse a typed quantity — decimals allowed for weighed goods (kg, litres). */
+function parseQty(text: string): number | null {
+  const v = parseFloat(text);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
+ * Shown the moment a product tile is tapped: the cashier confirms or edits
+ * the final ("last") price and quantity before the item lands in the cart.
+ * This keeps every line's price exact — with several products in one sale,
+ * a single whole-cart bargain could never be attributed per product.
+ * (Barcode scans skip this dialog for speed and reuse the last sold price.)
+ */
+function AddPriceDialog({
+  product,
+  onClose,
+  onAdd,
+}: {
+  product: CatalogProduct | null;
+  onClose: () => void;
+  onAdd: (
+    product: CatalogProduct,
+    opts: {
+      priceType: "retail" | "wholesale";
+      qty: number;
+      unitPrice: number;
+    },
+  ) => void;
+}) {
+  return (
+    <Dialog open={product !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="bg-card border-border w-[calc(100vw-1.5rem)] sm:max-w-xs">
+        <DialogHeader>
+          <DialogTitle className="font-display leading-snug">
+            {product?.name ?? "Add product"}
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            Confirm the price and quantity before adding to the cart
+          </DialogDescription>
+        </DialogHeader>
+        {product && (
+          <AddPriceForm key={product.id} product={product} onAdd={onAdd} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddPriceForm({
+  product,
+  onAdd,
+}: {
+  product: CatalogProduct;
+  onAdd: (
+    product: CatalogProduct,
+    opts: {
+      priceType: "retail" | "wholesale";
+      qty: number;
+      unitPrice: number;
+    },
+  ) => void;
+}) {
+  const [priceType, setPriceType] = useState<"retail" | "wholesale">("retail");
+  const listPrice =
+    priceType === "retail" ? product.retailPrice : product.wholesalePrice;
+  const [priceText, setPriceText] = useState(() =>
+    formatPlain(product.lastSoldPrice ?? product.retailPrice),
+  );
+  const [qtyText, setQtyText] = useState("1");
+
+  const price = parseKes(priceText);
+  const qty = parseQty(qtyText);
+  const priceLocked = !product.allowBargain;
+  const effectivePrice = priceLocked ? listPrice : price;
+  const valid = effectivePrice !== null && effectivePrice > 0 && qty !== null;
+  const hasWholesale =
+    product.wholesalePrice > 0 && product.wholesalePrice !== product.retailPrice;
+
+  function flipPriceType(pt: "retail" | "wholesale") {
+    setPriceType(pt);
+    // Re-price to the target list price; the cashier can still edit after.
+    setPriceText(
+      formatPlain(pt === "retail" ? product.retailPrice : product.wholesalePrice),
+    );
+  }
+
+  function submit(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!valid) return;
+    onAdd(product, { priceType, qty: qty!, unitPrice: effectivePrice! });
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      {hasWholesale && (
+        <div className="grid grid-cols-2 gap-1 rounded-md border border-border p-1">
+          {(["retail", "wholesale"] as const).map((pt) => (
+            <button
+              key={pt}
+              type="button"
+              onClick={() => flipPriceType(pt)}
+              className={`rounded px-2 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors cursor-pointer ${
+                priceType === pt
+                  ? pt === "wholesale"
+                    ? "bg-warning text-warning-foreground"
+                    : "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {pt === "retail" ? "Retail" : "Wholesale"}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="add-qty">Quantity</Label>
+          <Input
+            id="add-qty"
+            inputMode="decimal"
+            value={qtyText}
+            onChange={(e) => setQtyText(e.target.value)}
+            className="bg-background border-input h-12 font-figures text-lg text-center"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="add-price">Last price (KES)</Label>
+          <Input
+            id="add-price"
+            inputMode="decimal"
+            autoFocus
+            readOnly={priceLocked}
+            value={priceLocked ? formatPlain(listPrice) : priceText}
+            onChange={(e) => setPriceText(e.target.value)}
+            className="bg-background border-input h-12 font-figures text-lg text-right"
+          />
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground -mt-1">
+        {priceLocked
+          ? "Fixed price — bargaining is off for this product."
+          : product.lastSoldPrice !== null
+            ? `Prefilled with the last price this sold at (list ${formatKes(listPrice)}).`
+            : `List price ${formatKes(listPrice)} — type the agreed price if different.`}
+      </p>
+      <div className="rounded-md border border-border bg-secondary/60 px-4 py-2.5 flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">Line total</span>
+        <span className="font-figures text-xl font-semibold">
+          {valid ? formatKes(Math.round(effectivePrice! * qty!)) : "—"}
+        </span>
+      </div>
+      <Button
+        type="submit"
+        disabled={!valid}
+        className="w-full h-11 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
+      >
+        Add to cart
+      </Button>
+    </form>
   );
 }
 

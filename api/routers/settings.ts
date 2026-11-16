@@ -5,7 +5,16 @@ import { createRouter, publicQuery, authedQuery, adminQuery } from "../middlewar
 import { isMegaPayReady } from "../megapay";
 import { env } from "../lib/env";
 
-const EDITABLE_KEYS = ["business_name", "shop_a_name", "shop_b_name"] as const;
+const EDITABLE_KEYS = [
+  "business_name",
+  "shop_a_name",
+  "shop_b_name",
+  "paybill_a",
+  "paybill_a_account",
+  "paybill_b",
+  "paybill_b_account",
+  "contact_phone",
+] as const;
 type EditableKey = (typeof EDITABLE_KEYS)[number];
 
 export const settingsRouter = createRouter({
@@ -26,6 +35,13 @@ export const settingsRouter = createRouter({
       businessName: map["business_name"] ?? "Comrade Shop",
       shopAName: map["shop_a_name"] ?? "Comrade Shop A",
       shopBName: map["shop_b_name"] ?? "Comrade Shop B",
+      // Printed at the bottom of every receipt so walk-in customers can pay
+      // by paybill later. Editable from admin Settings.
+      paybillA: map["paybill_a"] ?? "400200",
+      paybillAAccount: map["paybill_a_account"] ?? "1194190",
+      paybillB: map["paybill_b"] ?? "400200",
+      paybillBAccount: map["paybill_b_account"] ?? "1194216",
+      contactPhone: map["contact_phone"] ?? "0740223452",
       currency: "KES",
       // Per-shop: each shop prompts through its own MegaPay account.
       megapayConfigured: {
@@ -46,6 +62,11 @@ export const settingsRouter = createRouter({
         businessName: z.string().min(1).max(80).optional(),
         shopAName: z.string().min(1).max(80).optional(),
         shopBName: z.string().min(1).max(80).optional(),
+        paybillA: z.string().min(1).max(20).optional(),
+        paybillAAccount: z.string().min(1).max(40).optional(),
+        paybillB: z.string().min(1).max(20).optional(),
+        paybillBAccount: z.string().min(1).max(40).optional(),
+        contactPhone: z.string().min(1).max(20).optional(),
       }),
     )
     .mutation(({ input }) => {
@@ -54,6 +75,11 @@ export const settingsRouter = createRouter({
         ["business_name", input.businessName],
         ["shop_a_name", input.shopAName],
         ["shop_b_name", input.shopBName],
+        ["paybill_a", input.paybillA],
+        ["paybill_a_account", input.paybillAAccount],
+        ["paybill_b", input.paybillB],
+        ["paybill_b_account", input.paybillBAccount],
+        ["contact_phone", input.contactPhone],
       ];
       for (const [key, value] of pairs) {
         if (value === undefined) continue;

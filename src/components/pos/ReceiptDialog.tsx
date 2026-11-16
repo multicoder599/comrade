@@ -117,10 +117,18 @@ export function ReceiptDialog({
         ? settingsQuery.data?.shopAName ?? "Shop A"
         : settingsQuery.data?.shopBName ?? "Shop B"
       : "");
+  // Paybill details printed at the bottom of every receipt — per shop.
+  const paybill =
+    data?.sale.shop === "B"
+      ? { number: settingsQuery.data?.paybillB, account: settingsQuery.data?.paybillBAccount }
+      : { number: settingsQuery.data?.paybillA, account: settingsQuery.data?.paybillAAccount };
+  const contactPhone = settingsQuery.data?.contactPhone;
   // Clone + exact-fit page size are ready the moment the receipt (including
   // the resolved shop name) is rendered, so any print path is clean.
   useThermalPrintSetup(
-    open && data ? `${data.sale.id}:${resolvedShopName}` : null,
+    open && data
+      ? `${data.sale.id}:${resolvedShopName}:${paybill.account ?? ""}:${contactPhone ?? ""}`
+      : null,
   );
 
   return (
@@ -204,6 +212,15 @@ export function ReceiptDialog({
                 sale={data.sale}
               />
               <Rule />
+              <div className="text-center space-y-0.5 py-0.5">
+                {paybill.number && paybill.account && (
+                  <p className="font-bold">
+                    PAYBILL: {paybill.number} ACC: {paybill.account}
+                  </p>
+                )}
+                {contactPhone && <p>TEL: {contactPhone}</p>}
+              </div>
+              <Rule />
               <p className="text-center font-bold py-0.5">
                 *** Asante! Karibu Tena! ***
               </p>
@@ -260,6 +277,7 @@ function PaymentLines({
     mpesaReceipt: string | null;
     customerName: string | null;
     customerPhone: string | null;
+    debtId: number | null;
   };
 }) {
   const line = (label: string, value: string, bold = false) => (
@@ -273,6 +291,25 @@ function PaymentLines({
   );
 
   if (sale.paymentMethod === "split") {
+    // Split can be cash + M-Pesa or cash + debt (remainder on the tab).
+    if (sale.mpesaAmount === null || sale.debtId !== null) {
+      const onDebt = sale.total - (sale.cashAmount ?? 0);
+      return (
+        <div className="space-y-0.5">
+          {line("PAYMENT", "CASH + DEBT", true)}
+          {line("CASH", formatAmount2(sale.cashAmount ?? 0))}
+          {line("ON DEBT", formatAmount2(onDebt))}
+          {line(
+            "CUSTOMER",
+            `${sale.customerName ?? ""}${sale.customerPhone ? ` ${sale.customerPhone}` : ""}`,
+          )}
+          {sale.tendered !== null &&
+            sale.change !== null &&
+            sale.change > 0 &&
+            line("CHANGE", formatAmount2(sale.change))}
+        </div>
+      );
+    }
     return (
       <div className="space-y-0.5">
         {line("PAYMENT", "CASH + M-PESA", true)}

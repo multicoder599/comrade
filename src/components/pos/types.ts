@@ -18,7 +18,8 @@ export type CatalogProduct = {
 export type PriceType = "retail" | "wholesale";
 
 export type CartLine = {
-  /** `${productId}:${priceType}` — retail and wholesale lines stay separate */
+  /** `${productId}:${priceType}:${unitPrice}` — same product at two different
+   * agreed prices stays on two lines, so per-product profit stays exact */
   key: string;
   productId: number;
   name: string;
@@ -33,8 +34,12 @@ export type CartLine = {
   allowBargain: boolean;
 };
 
-export function lineKey(productId: number, priceType: PriceType): string {
-  return `${productId}:${priceType}`;
+export function lineKey(
+  productId: number,
+  priceType: PriceType,
+  unitPrice?: number,
+): string {
+  return `${productId}:${priceType}:${unitPrice ?? "list"}`;
 }
 
 /** An M-Pesa (or split) payment waiting for the customer to enter their PIN. */

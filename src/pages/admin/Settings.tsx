@@ -23,6 +23,11 @@ export default function Settings() {
   const [businessName, setBusinessName] = useState("");
   const [shopAName, setShopAName] = useState("");
   const [shopBName, setShopBName] = useState("");
+  const [paybillA, setPaybillA] = useState("");
+  const [paybillAAccount, setPaybillAAccount] = useState("");
+  const [paybillB, setPaybillB] = useState("");
+  const [paybillBAccount, setPaybillBAccount] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const [currentPw, setCurrentPw] = useState("");
@@ -34,6 +39,11 @@ export default function Settings() {
       setBusinessName(settingsQuery.data.businessName);
       setShopAName(settingsQuery.data.shopAName);
       setShopBName(settingsQuery.data.shopBName);
+      setPaybillA(settingsQuery.data.paybillA);
+      setPaybillAAccount(settingsQuery.data.paybillAAccount);
+      setPaybillB(settingsQuery.data.paybillB);
+      setPaybillBAccount(settingsQuery.data.paybillBAccount);
+      setContactPhone(settingsQuery.data.contactPhone);
     }
   }, [settingsQuery.data]);
 
@@ -85,17 +95,79 @@ export default function Settings() {
             </div>
           </div>
         </div>
+      </section>
+
+      <section className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <h2 className="font-display font-semibold">Receipt payment details</h2>
+        <p className="text-xs text-muted-foreground">
+          Printed at the bottom of every receipt so customers can pay by
+          paybill or call the shop.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Shop A paybill</Label>
+            <Input
+              value={paybillA}
+              onChange={(e) => setPaybillA(e.target.value)}
+              className="bg-background border-input font-figures"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Shop A account number</Label>
+            <Input
+              value={paybillAAccount}
+              onChange={(e) => setPaybillAAccount(e.target.value)}
+              className="bg-background border-input font-figures"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Shop B paybill</Label>
+            <Input
+              value={paybillB}
+              onChange={(e) => setPaybillB(e.target.value)}
+              className="bg-background border-input font-figures"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Shop B account number</Label>
+            <Input
+              value={paybillBAccount}
+              onChange={(e) => setPaybillBAccount(e.target.value)}
+              className="bg-background border-input font-figures"
+            />
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label>Contact phone (both receipts)</Label>
+            <Input
+              value={contactPhone}
+              onChange={(e) => setContactPhone(e.target.value)}
+              className="bg-background border-input font-figures"
+            />
+          </div>
+        </div>
+      </section>
+
+      <div>
         <Button
           className="bg-primary text-primary-foreground hover:bg-primary/90"
           disabled={update.isPending}
           onClick={() =>
-            update.mutate({ businessName, shopAName, shopBName })
+            update.mutate({
+              businessName,
+              shopAName,
+              shopBName,
+              paybillA,
+              paybillAAccount,
+              paybillB,
+              paybillBAccount,
+              contactPhone,
+            })
           }
         >
           {update.isPending ? "Saving…" : "Save settings"}
         </Button>
-        {feedback && <p className="text-sm text-muted-foreground">{feedback}</p>}
-      </section>
+        {feedback && <p className="text-sm text-muted-foreground mt-2">{feedback}</p>}
+      </div>
 
       <section className="rounded-lg border border-border bg-card p-4 space-y-3">
         <h2 className="font-display font-semibold">MegaPay (M-Pesa)</h2>

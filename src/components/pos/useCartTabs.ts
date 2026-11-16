@@ -30,7 +30,7 @@ function normalizeTab(raw: StoredTab, index: number): CartTab {
       const priceType: PriceType =
         l.priceType === "wholesale" ? "wholesale" : defaultType;
       return {
-        key: l.key ?? lineKey(l.productId, priceType),
+        key: l.key ?? lineKey(l.productId, priceType, l.unitPrice),
         productId: l.productId,
         name: l.name ?? "",
         unit: l.unit ?? "pc",
@@ -115,19 +115,27 @@ export function useCartTabs(shop: "A" | "B") {
   );
 
   const addProduct = useCallback(
-    (product: CatalogProduct, priceType: PriceType = "retail") => {
+    (
+      product: CatalogProduct,
+      opts: { priceType?: PriceType; qty?: number; unitPrice?: number } = {},
+    ) => {
+      const priceType = opts.priceType ?? "retail";
       updateTab(active.id, (tab) => {
         if (tab.pending) return tab; // locked while waiting for payment
         const listPrice =
           priceType === "retail" ? product.retailPrice : product.wholesalePrice;
-        const key = lineKey(product.id, priceType);
+        const unitPrice = opts.unitPrice ?? product.lastSoldPrice ?? listPrice;
+        const qty = opts.qty ?? 1;
+        // Lines are keyed by price too: the same product at two different
+        // agreed prices becomes two lines, never a merged average.
+        const key = lineKey(product.id, priceType, unitPrice);
         const existing = tab.lines.find((l) => l.key === key);
         if (existing) {
           return {
             ...tab,
             notice: null,
             lines: tab.lines.map((l) =>
-              l.key === key ? { ...l, qty: l.qty + 1 } : l,
+              l.key === key ? { ...l, qty: l.qty + qty } : l,
             ),
           };
         }
@@ -136,9 +144,9 @@ export function useCartTabs(shop: "A" | "B") {
           productId: product.id,
           name: product.name,
           unit: product.unit,
-          qty: 1,
+          qty,
           priceType,
-          unitPrice: listPrice,
+          unitPrice,
           listPrice,
           stockQty: product.stockQty,
           allowBargain: product.allowBargain,
@@ -159,7 +167,8 @@ export function useCartTabs(shop: "A" | "B") {
         if (!p) return tab;
         const listPrice =
           priceType === "retail" ? p.retailPrice : p.wholesalePrice;
-        const newKey = lineKey(line.productId, priceType);
+        // Flipping price type re-prices to the list price, so the key uses it.
+        const newKey = lineKey(line.productId, priceType, listPrice);
         const mergeTarget = tab.lines.find((l) => l.key === newKey);
         if (mergeTarget) {
           // Same product already present at that price type — merge quantities.

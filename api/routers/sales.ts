@@ -28,7 +28,7 @@ function receiptNo(shop: string, id: number): string {
 type Db = ReturnType<typeof getDb>;
 type DbOrTx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-function restockTx(t: DbOrTx, sale: { id: number; shop: string }) {
+function restockTx(t: DbOrTx, sale: { id: number; shop: "A" | "B" }) {
   const items = t.select().from(saleItems).where(eq(saleItems.saleId, sale.id)).all();
   for (const item of items) {
     t.update(stocks)
@@ -94,8 +94,10 @@ export const salesRouter = createRouter({
         lines: z.array(lineInput).min(1),
         discount: z.number().int().min(0).default(0),
         tendered: z.number().int().min(0).optional(),
-        // Split payments: the cash part; the rest goes to M-Pesa.
+        // Split payments: the cash part; the rest goes to M-Pesa or debt.
         cashAmount: z.number().int().min(0).optional(),
+        // For split sales: how the remainder is settled (default M-Pesa).
+        remainder: z.enum(["megapay", "debt"]).default("megapay"),
         customerName: z.string().max(80).optional(),
         customerPhone: z.string().max(20).optional(),
       }),
@@ -110,10 +112,16 @@ export const salesRouter = createRouter({
           message: "Admins cannot sell from the till — log in as a shop cashier",
         });
       }
+      // Narrowed alias: hoisted function declarations below don't inherit
+      // the `if (!shop) throw` narrowing, so give them an explicit type.
+      const shopId: "A" | "B" = shop;
+      const splitDebt =
+        input.paymentMethod === "split" && input.remainder === "debt";
       const needsMpesa =
-        input.paymentMethod === "megapay" || input.paymentMethod === "split";
+        input.paymentMethod === "megapay" ||
+        (input.paymentMethod === "split" && !splitDebt);
       if (
-        input.paymentMethod === "debt" &&
+        (input.paymentMethod === "debt" || splitDebt) &&
         (!input.customerName?.trim() || !input.customerPhone?.trim())
       ) {
         throw new TRPCError({
@@ -195,7 +203,7 @@ export const salesRouter = createRouter({
           .insert(sales)
           .values({
             receiptNo: fields.mpesaRequestId ?? "TMP",
-            shop,
+            shop: shopId,
             cashierId: user.id,
             cashierName: user.displayName,
             mode,
@@ -216,12 +224,12 @@ export const salesRouter = createRouter({
           })
           .run();
         const id = Number(info.lastInsertRowid);
-        t.update(sales).set({ receiptNo: receiptNo(shop, id) }).where(eq(sales.id, id)).run();
+        t.update(sales).set({ receiptNo: receiptNo(shopId, id) }).where(eq(sales.id, id)).run();
         for (const l of lines) {
           t.insert(saleItems).values({ saleId: id, ...l }).run();
           t.update(stocks)
             .set({ qty: sql`${stocks.qty} - ${l.qty}` })
-            .where(and(eq(stocks.productId, l.productId), eq(stocks.shop, shop)))
+            .where(and(eq(stocks.productId, l.productId), eq(stocks.shop, shopId)))
             .run();
           t.update(products)
             .set({ lastSoldPrice: l.unitPrice, updatedAt: now })
@@ -231,66 +239,80 @@ export const salesRouter = createRouter({
         return id;
       }
 
+      // Add `amount` to the customer's running tab (creating it if needed) and
+      // apply any store credit from previous overpayments. Must run inside a
+      // transaction. Returns the tab id and how much credit was consumed.
+      function applyDebtTx(
+        t: DbOrTx,
+        shop: "A" | "B",
+        phone: string,
+        name: string,
+        amount: number,
+      ): { debtId: number; creditApplied: number } {
+        const credit = customerCredit(t, shop, phone);
+        const creditApplied = Math.min(credit, amount);
+        const existing = t
+          .select()
+          .from(debts)
+          .where(
+            and(
+              eq(debts.shop, shop),
+              eq(debts.customerPhone, phone),
+              or(eq(debts.status, "open"), eq(debts.status, "partial")),
+            ),
+          )
+          .orderBy(desc(debts.id))
+          .get();
+
+        let debtId: number;
+        if (existing) {
+          debtId = existing.id;
+          const newAmount = existing.amount + amount;
+          const paid = existing.amountPaid + creditApplied;
+          t.update(debts)
+            .set({ amount: newAmount, amountPaid: paid, status: debtStatus(newAmount, paid), updatedAt: now })
+            .where(eq(debts.id, debtId))
+            .run();
+        } else {
+          const info = t
+            .insert(debts)
+            .values({
+              shop,
+              customerName: name,
+              customerPhone: phone,
+              saleId: null,
+              amount,
+              amountPaid: creditApplied,
+              status: debtStatus(amount, creditApplied),
+              createdAt: now,
+              updatedAt: now,
+            })
+            .run();
+          debtId = Number(info.lastInsertRowid);
+        }
+        if (creditApplied > 0) {
+          t.insert(debtPayments)
+            .values({
+              debtId,
+              amount: creditApplied,
+              method: "credit",
+              cashierName: user.displayName,
+              createdAt: now,
+            })
+            .run();
+        }
+        return { debtId, creditApplied };
+      }
+
       // --- Debt path: goods leave now, customer pays later. If the customer
       // already has a running tab, this purchase is added to it; any store
       // credit from previous overpayments is applied automatically. ---
       if (input.paymentMethod === "debt") {
         const phone = input.customerPhone!.trim();
         const name = input.customerName!.trim();
-        const credit = customerCredit(db, shop, phone);
-        const creditApplied = Math.min(credit, total);
 
-        const saleId = db.transaction((t) => {
-          const existing = t
-            .select()
-            .from(debts)
-            .where(
-              and(
-                eq(debts.shop, shop),
-                eq(debts.customerPhone, phone),
-                or(eq(debts.status, "open"), eq(debts.status, "partial")),
-              ),
-            )
-            .orderBy(desc(debts.id))
-            .get();
-
-          let debtId: number;
-          if (existing) {
-            debtId = existing.id;
-            const amount = existing.amount + total;
-            const paid = existing.amountPaid + creditApplied;
-            t.update(debts)
-              .set({ amount, amountPaid: paid, status: debtStatus(amount, paid), updatedAt: now })
-              .where(eq(debts.id, debtId))
-              .run();
-          } else {
-            const info = t
-              .insert(debts)
-              .values({
-                shop,
-                customerName: name,
-                customerPhone: phone,
-                saleId: null,
-                amount: total,
-                amountPaid: creditApplied,
-                status: debtStatus(total, creditApplied),
-                createdAt: now,
-                updatedAt: now,
-              })
-              .run();
-            debtId = Number(info.lastInsertRowid);
-          }
-          if (creditApplied > 0) {
-            t.insert(debtPayments)
-              .values({
-                debtId,
-                amount: creditApplied,
-                method: "credit",
-                cashierName: user.displayName,
-                createdAt: now,
-              })
-              .run();
-          }
+        const { saleId, creditApplied } = db.transaction((t) => {
+          const { debtId, creditApplied } = applyDebtTx(t, shop, phone, name, total);
           const id = insertSaleTx(t, {
             status: "completed",
             paymentMethod: "debt",
@@ -301,11 +323,56 @@ export const salesRouter = createRouter({
             .set({ saleId: sql`coalesce(${debts.saleId}, ${id})` })
             .where(eq(debts.id, debtId))
             .run();
-          return id;
+          return { saleId: id, creditApplied };
         });
 
         const sale = db.select().from(sales).where(eq(sales.id, saleId)).get()!;
         log.info("debt sale recorded", { saleId, shop, customer: name, creditApplied });
+        return { sale, items: lines, stkMessage: null as string | null, creditApplied };
+      }
+
+      // --- Split cash + debt: customer pays part in cash now, the remainder
+      // goes onto their debt tab. Completes immediately — no M-Pesa prompt. ---
+      if (splitDebt) {
+        const cashPart = input.cashAmount ?? 0;
+        if (cashPart <= 0 || cashPart >= total) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Split needs a cash part that is less than the total — use Cash or Debt instead",
+          });
+        }
+        const tendered = input.tendered ?? cashPart;
+        if (tendered < cashPart) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Cash tendered is less than the cash part",
+          });
+        }
+        const debtPart = total - cashPart;
+        const phone = input.customerPhone!.trim();
+        const name = input.customerName!.trim();
+
+        const { saleId, creditApplied } = db.transaction((t) => {
+          const { debtId, creditApplied } = applyDebtTx(t, shop, phone, name, debtPart);
+          const id = insertSaleTx(t, {
+            status: "completed",
+            paymentMethod: "split",
+            tendered,
+            change: tendered - cashPart,
+            cashAmount: cashPart,
+            mpesaAmount: null,
+            debtId,
+          });
+          t.update(debts)
+            .set({ saleId: sql`coalesce(${debts.saleId}, ${id})` })
+            .where(eq(debts.id, debtId))
+            .run();
+          return { saleId: id, creditApplied };
+        });
+
+        const sale = db.select().from(sales).where(eq(sales.id, saleId)).get()!;
+        log.info("split cash+debt sale recorded", { saleId, shop, customer: name, cashPart, debtPart });
+        // (debtPart remainder now sits on the customer's tab)
         return { sale, items: lines, stkMessage: null as string | null, creditApplied };
       }
 
@@ -577,7 +644,7 @@ export const salesRouter = createRouter({
 // the customer's debt tab.
 function reverseSaleEffects(
   t: DbOrTx,
-  sale: { id: number; shop: string; status: string; paymentMethod: string; debtId: number | null; total: number },
+  sale: { id: number; shop: "A" | "B"; status: string; paymentMethod: string; debtId: number | null; total: number },
 ) {
   if (sale.status === "completed" || sale.status === "pending") {
     restockTx(t, sale);

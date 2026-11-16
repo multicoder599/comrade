@@ -62,6 +62,9 @@ export function CheckoutDialog({
   const [tenderedText, setTenderedText] = useState("");
   const [phone, setPhone] = useState("");
   const [cashPartText, setCashPartText] = useState("");
+  const [splitRemainder, setSplitRemainder] = useState<"megapay" | "debt">(
+    "megapay",
+  );
   const [debtName, setDebtName] = useState("");
   const [debtPhone, setDebtPhone] = useState("");
   const [bargainText, setBargainText] = useState("");
@@ -72,7 +75,8 @@ export function CheckoutDialog({
   // Known debt customers for this shop — lets the cashier add to an existing
   // tab instead of creating a duplicate.
   const customersQuery = trpc.debts.customers.useQuery(undefined, {
-    enabled: open && phase.step === "debt",
+    enabled:
+      open && (phase.step === "debt" || phase.step === "split"),
   });
 
   useEffect(() => {
@@ -81,12 +85,13 @@ export function CheckoutDialog({
       setTenderedText("");
       setPhone("");
       setCashPartText("");
+      setSplitRemainder(megapayEnabled ? "megapay" : "debt");
       setDebtName("");
       setDebtPhone("");
       setBargainText("");
       setBusy(false);
     }
-  }, [open]);
+  }, [open, megapayEnabled]);
 
   const linesPayload = () =>
     tab.lines.map((l) => ({
@@ -215,14 +220,12 @@ export function CheckoutDialog({
               variant="outline"
               className="h-auto min-h-13 w-full min-w-0 justify-start gap-3 border-border hover:bg-secondary py-2.5"
               onClick={() => setPhase({ step: "split" })}
-              disabled={!megapayEnabled}
-              title={mpesaNote}
             >
               <Split className="size-5 text-primary shrink-0" />
               <span className="text-left min-w-0">
-                <span className="block font-semibold">Split · Cash + M-Pesa</span>
+                <span className="block font-semibold">Split · Cash + M-Pesa/Debt</span>
                 <span className="block text-xs text-muted-foreground whitespace-normal break-words">
-                  Part cash now, the rest by M-Pesa prompt
+                  Part cash now, the rest by M-Pesa prompt or on the customer's tab
                 </span>
               </span>
             </Button>
@@ -306,7 +309,7 @@ export function CheckoutDialog({
                 <Button
                   variant="outline"
                   className="border-border hover:bg-secondary gap-1.5"
-                  disabled={!bargainValid || !megapayEnabled}
+                  disabled={!bargainValid}
                   onClick={() => setPhase({ step: "split" })}
                 >
                   <Split className="size-4 text-primary" />
@@ -426,6 +429,32 @@ export function CheckoutDialog({
 
         {phase.step === "split" && (
           <div className="space-y-3.5">
+            {/* How the remainder (total − cash part) is settled */}
+            <div className="grid grid-cols-2 gap-1 rounded-md border border-border p-1">
+              <button
+                type="button"
+                disabled={!megapayEnabled}
+                onClick={() => setSplitRemainder("megapay")}
+                className={`rounded px-2 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                  splitRemainder === "megapay"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Rest by M-Pesa
+              </button>
+              <button
+                type="button"
+                onClick={() => setSplitRemainder("debt")}
+                className={`rounded px-2 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors cursor-pointer ${
+                  splitRemainder === "debt"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Rest on debt
+              </button>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="cash-part">Cash part (KES)</Label>
@@ -433,14 +462,16 @@ export function CheckoutDialog({
                   id="cash-part"
                   inputMode="decimal"
                   autoFocus
-                  placeholder={formatPlain(Math.floor(total / 2))}
+                  placeholder={formatPlain(Math.floor(effectiveTotal / 2))}
                   value={cashPartText}
                   onChange={(e) => setCashPartText(e.target.value)}
                   className="bg-background border-input h-11 font-figures"
                 />
               </div>
               <div className="space-y-2">
-                <Label>M-Pesa part</Label>
+                <Label>
+                  {splitRemainder === "megapay" ? "M-Pesa part" : "Debt part"}
+                </Label>
                 <div className="h-11 rounded-md border border-border bg-secondary/60 px-3 flex items-center font-figures font-semibold">
                   {splitMpesa !== null && splitMpesa > 0
                     ? formatKes(splitMpesa)
@@ -473,17 +504,77 @@ export function CheckoutDialog({
                 </div>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="split-phone">Customer M-Pesa number</Label>
-              <Input
-                id="split-phone"
-                inputMode="tel"
-                placeholder="0712 345 678"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="bg-background border-input h-11 font-figures"
-              />
-            </div>
+            {splitRemainder === "megapay" ? (
+              <div className="space-y-2">
+                <Label htmlFor="split-phone">Customer M-Pesa number</Label>
+                <Input
+                  id="split-phone"
+                  inputMode="tel"
+                  placeholder="0712 345 678"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="bg-background border-input h-11 font-figures"
+                />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {(customersQuery.data?.length ?? 0) > 0 && (
+                  <div className="max-h-28 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                    {customersQuery.data!.map((c) => {
+                      const selected = debtPhone === c.phone;
+                      return (
+                        <button
+                          key={c.phone}
+                          type="button"
+                          onClick={() => {
+                            setDebtName(c.name);
+                            setDebtPhone(c.phone);
+                          }}
+                          className={`w-full px-3 py-1.5 flex items-center justify-between gap-2 text-left text-sm transition-colors cursor-pointer ${
+                            selected ? "bg-primary/10" : "hover:bg-secondary"
+                          }`}
+                        >
+                          <span className="min-w-0 truncate">
+                            {c.name}
+                            <span className="text-xs text-muted-foreground font-figures ml-1.5">
+                              {c.phone}
+                            </span>
+                          </span>
+                          {c.owes > 0 && (
+                            <span className="shrink-0 text-xs font-figures text-warning">
+                              owes {formatKes(c.owes)}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="split-debt-name">Customer name</Label>
+                    <Input
+                      id="split-debt-name"
+                      placeholder="e.g. Mama Njoroge"
+                      value={debtName}
+                      onChange={(e) => setDebtName(e.target.value)}
+                      className="bg-background border-input h-11"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="split-debt-phone">Phone number</Label>
+                    <Input
+                      id="split-debt-phone"
+                      inputMode="tel"
+                      placeholder="0712 345 678"
+                      value={debtPhone}
+                      onChange={(e) => setDebtPhone(e.target.value)}
+                      className="bg-background border-input h-11 font-figures"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -496,11 +587,13 @@ export function CheckoutDialog({
                 className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
                 disabled={
                   busy ||
-                  !phoneValid ||
                   cashPart === null ||
                   cashPart <= 0 ||
                   cashPart >= effectiveTotal ||
-                  (splitTendered !== null && splitTendered < cashPart)
+                  (splitTendered !== null && splitTendered < cashPart) ||
+                  (splitRemainder === "megapay"
+                    ? !phoneValid
+                    : !debtName.trim() || !debtPhoneValid)
                 }
                 onClick={() =>
                   runCheckout({
@@ -509,14 +602,20 @@ export function CheckoutDialog({
                     discount: effectiveDiscount,
                     cashAmount: cashPart ?? 0,
                     tendered: splitTendered ?? cashPart ?? 0,
-                    customerPhone: phone,
+                    remainder: splitRemainder,
+                    customerPhone:
+                      splitRemainder === "megapay" ? phone : debtPhone.trim(),
+                    customerName:
+                      splitRemainder === "debt" ? debtName.trim() : undefined,
                   })
                 }
               >
                 {busy ? (
                   <Loader2 className="size-4 animate-spin" />
-                ) : (
+                ) : splitRemainder === "megapay" ? (
                   "Take cash + send prompt"
+                ) : (
+                  "Take cash + record debt"
                 )}
               </Button>
             </div>
