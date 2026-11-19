@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS products (
   wholesale_price INTEGER NOT NULL DEFAULT 0,
   wholesale_min_qty REAL NOT NULL DEFAULT 1,
   last_sold_price INTEGER,
+  low_stock_at REAL NOT NULL DEFAULT 5,
+  min_price INTEGER,
   allow_bargain INTEGER NOT NULL DEFAULT 1,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -84,9 +86,28 @@ CREATE TABLE IF NOT EXISTS sale_items (
   unit_price INTEGER NOT NULL,
   list_price INTEGER NOT NULL,
   buying_price INTEGER NOT NULL,
-  line_total INTEGER NOT NULL
+  line_total INTEGER NOT NULL,
+  pack_name TEXT,
+  pack_units REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
+CREATE TABLE IF NOT EXISTS product_packages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  name TEXT NOT NULL,
+  qty REAL NOT NULL,
+  price INTEGER NOT NULL,
+  barcode TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_product_packages_product ON product_packages(product_id);
+CREATE TABLE IF NOT EXISTS customers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shop TEXT NOT NULL CHECK (shop IN ('A','B')),
+  name TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_shop_phone ON customers(shop, phone);
 CREATE TABLE IF NOT EXISTS debts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   shop TEXT NOT NULL CHECK (shop IN ('A','B')),
@@ -241,10 +262,19 @@ function migrate(sqlite: Database.Database) {
   ensureColumn(sqlite, "products", "last_sold_price", "last_sold_price INTEGER");
   ensureColumn(
     sqlite,
+    "products",
+    "low_stock_at",
+    "low_stock_at REAL NOT NULL DEFAULT 5",
+  );
+  ensureColumn(sqlite, "products", "min_price", "min_price INTEGER");
+  ensureColumn(
+    sqlite,
     "sale_items",
     "price_type",
     "price_type TEXT NOT NULL DEFAULT 'retail'",
   );
+  ensureColumn(sqlite, "sale_items", "pack_name", "pack_name TEXT");
+  ensureColumn(sqlite, "sale_items", "pack_units", "pack_units REAL");
   ensureColumn(sqlite, "sales", "cash_amount", "cash_amount INTEGER");
   ensureColumn(sqlite, "sales", "mpesa_amount", "mpesa_amount INTEGER");
   ensureColumn(sqlite, "sales", "debt_id", "debt_id INTEGER");
@@ -255,6 +285,12 @@ function migrate(sqlite: Database.Database) {
     "CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)",
   );
   sqlite.exec("CREATE INDEX IF NOT EXISTS idx_sales_debt ON sales(debt_id)");
+  // Everyone who already has a debt tab becomes a registered debt customer,
+  // so existing credit relationships keep working under the new rule.
+  sqlite.exec(
+    `INSERT OR IGNORE INTO customers (shop, name, phone, created_at)
+     SELECT DISTINCT shop, customer_name, customer_phone, created_at FROM debts`,
+  );
 }
 
 function bootstrap(sqlite: Database.Database) {

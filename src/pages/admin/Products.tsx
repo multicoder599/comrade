@@ -20,6 +20,11 @@ import {
 } from "@/components/ui/table";
 import { trpc } from "@/providers/trpc";
 import { CategorySelect } from "@/components/CategorySelect";
+import {
+  PackagesEditor,
+  parsePacks,
+  type PackFormRow,
+} from "@/components/PackagesEditor";
 import { errorMessage } from "@/lib/auth";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
 import { Plus, Pencil, Search, Trash2 } from "lucide-react";
@@ -33,13 +38,21 @@ type ProductRow = {
   unit: string;
   buyingPrice: number;
   retailPrice: number;
-  wholesalePrice: number;
-  wholesaleMinQty: number;
+  minPrice: number | null;
+  lowStockAt: number;
   lastSoldPrice: number | null;
   allowBargain: boolean;
   active: boolean;
   stockA: number;
   stockB: number;
+  packages: {
+    id: number;
+    productId: number;
+    name: string;
+    qty: number;
+    price: number;
+    barcode: string | null;
+  }[];
 };
 
 type FormState = {
@@ -50,9 +63,10 @@ type FormState = {
   unit: string;
   buyingPrice: string;
   retailPrice: string;
-  wholesalePrice: string;
-  wholesaleMinQty: string;
+  minPrice: string;
+  lowStockAt: string;
   allowBargain: boolean;
+  packages: PackFormRow[];
 };
 
 const EMPTY_FORM: FormState = {
@@ -63,9 +77,10 @@ const EMPTY_FORM: FormState = {
   unit: "pc",
   buyingPrice: "",
   retailPrice: "",
-  wholesalePrice: "",
-  wholesaleMinQty: "1",
+  minPrice: "",
+  lowStockAt: "5",
   allowBargain: true,
+  packages: [],
 };
 
 export default function Products() {
@@ -133,9 +148,15 @@ export default function Products() {
       unit: p.unit,
       buyingPrice: formatPlain(p.buyingPrice),
       retailPrice: formatPlain(p.retailPrice),
-      wholesalePrice: formatPlain(p.wholesalePrice),
-      wholesaleMinQty: String(p.wholesaleMinQty),
+      minPrice: p.minPrice !== null ? formatPlain(p.minPrice) : "",
+      lowStockAt: String(p.lowStockAt),
       allowBargain: p.allowBargain,
+      packages: p.packages.map((pk) => ({
+        name: pk.name,
+        qty: formatQty(pk.qty),
+        price: formatPlain(pk.price),
+        barcode: pk.barcode ?? "",
+      })),
     });
     setError(null);
     setDialogOpen(true);
@@ -144,13 +165,28 @@ export default function Products() {
   function save() {
     const buyingPrice = parseKes(form.buyingPrice);
     const retailPrice = parseKes(form.retailPrice);
-    const wholesalePrice = parseKes(form.wholesalePrice);
+    // Optional: the lowest price the till accepts for this product.
+    const minPrice = form.minPrice.trim() === "" ? null : parseKes(form.minPrice);
+    const lowStockAt = form.lowStockAt.trim() === "" ? 5 : Number(form.lowStockAt);
     if (!form.sku.trim() || !form.name.trim()) {
       setError("SKU and name are required");
       return;
     }
-    if (buyingPrice === null || retailPrice === null || wholesalePrice === null) {
+    if (buyingPrice === null || retailPrice === null) {
       setError("Enter valid prices");
+      return;
+    }
+    if (form.minPrice.trim() !== "" && minPrice === null) {
+      setError("Enter a valid minimum price, or leave it empty");
+      return;
+    }
+    if (!Number.isFinite(lowStockAt) || lowStockAt < 0) {
+      setError("Enter a valid low stock level");
+      return;
+    }
+    const packages = parsePacks(form.packages, parseKes);
+    if (packages === null) {
+      setError("Every package needs a name, a quantity and a selling price");
       return;
     }
     const payload = {
@@ -161,9 +197,10 @@ export default function Products() {
       unit: form.unit.trim() || "pc",
       buyingPrice,
       retailPrice,
-      wholesalePrice,
-      wholesaleMinQty: Number(form.wholesaleMinQty) || 1,
+      minPrice,
+      lowStockAt,
       allowBargain: form.allowBargain,
+      packages,
     };
     setError(null);
     if (editing) {
@@ -210,7 +247,7 @@ export default function Products() {
               <TableHead>Product</TableHead>
               <TableHead className="text-right">Buying</TableHead>
               <TableHead className="text-right">Retail</TableHead>
-              <TableHead className="text-right">Wholesale</TableHead>
+              <TableHead className="text-right">Min price</TableHead>
               <TableHead className="text-right">Last sold</TableHead>
               <TableHead className="text-right">Margin</TableHead>
               <TableHead className="text-center">Bargain</TableHead>
@@ -232,6 +269,13 @@ export default function Products() {
                       {p.barcode ? ` · ⌗${p.barcode}` : ""} · {p.category} · per{" "}
                       {p.unit}
                     </p>
+                    {p.packages.length > 0 && (
+                      <p className="text-[10px] font-figures text-warning">
+                        {p.packages
+                          .map((pk) => `${pk.name} ×${formatQty(pk.qty)} @ ${formatKes(pk.price)}`)
+                          .join(" · ")}
+                      </p>
+                    )}
                   </TableCell>
                   <TableCell className="text-right font-figures text-muted-foreground">
                     {formatKes(p.buyingPrice)}
@@ -240,9 +284,13 @@ export default function Products() {
                     {formatKes(p.retailPrice)}
                   </TableCell>
                   <TableCell className="text-right font-figures">
-                    {formatKes(p.wholesalePrice)}
+                    {p.minPrice !== null && p.minPrice > 0 ? (
+                      formatKes(p.minPrice)
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                     <span className="block text-[10px] text-muted-foreground">
-                      min {formatQty(p.wholesaleMinQty)}
+                      low stock at {formatQty(p.lowStockAt)}
                     </span>
                   </TableCell>
                   <TableCell className="text-right font-figures">
@@ -271,10 +319,14 @@ export default function Products() {
                       <span className="text-muted-foreground text-xs">fixed</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-right font-figures">
+                  <TableCell
+                    className={`text-right font-figures ${p.stockA <= p.lowStockAt ? "text-warning" : ""}`}
+                  >
                     {formatQty(p.stockA)}
                   </TableCell>
-                  <TableCell className="text-right font-figures">
+                  <TableCell
+                    className={`text-right font-figures ${p.stockB <= p.lowStockAt ? "text-warning" : ""}`}
+                  >
                     {formatQty(p.stockB)}
                   </TableCell>
                   <TableCell className="text-center">
@@ -322,7 +374,7 @@ export default function Products() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="bg-card border-border sm:max-w-lg">
+        <DialogContent className="bg-card border-border sm:max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="font-display">
               {editing ? `Edit ${editing.name}` : "New product"}
@@ -398,24 +450,23 @@ export default function Products() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Wholesale price (KES)</Label>
+              <Label>Minimum selling price (KES, optional)</Label>
               <Input
                 inputMode="decimal"
-                value={form.wholesalePrice}
-                onChange={(e) => setForm({ ...form, wholesalePrice: e.target.value })}
+                value={form.minPrice}
+                onChange={(e) => setForm({ ...form, minPrice: e.target.value })}
                 className="bg-background border-input font-figures"
-                placeholder="155"
+                placeholder="Till refuses anything below this"
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Wholesale min qty</Label>
+              <Label>Low stock alert at</Label>
               <Input
                 inputMode="decimal"
-                value={form.wholesaleMinQty}
-                onChange={(e) =>
-                  setForm({ ...form, wholesaleMinQty: e.target.value })
-                }
+                value={form.lowStockAt}
+                onChange={(e) => setForm({ ...form, lowStockAt: e.target.value })}
                 className="bg-background border-input font-figures"
+                placeholder="5"
               />
             </div>
             <div className="flex items-center gap-2.5 pt-6">
@@ -428,6 +479,11 @@ export default function Products() {
                 Allow price bargaining
               </Label>
             </div>
+            <PackagesEditor
+              packs={form.packages}
+              onChange={(packages) => setForm({ ...form, packages })}
+              unit={form.unit.trim() || "pc"}
+            />
           </div>
           {error && (
             <p className="text-sm text-destructive" role="alert">

@@ -154,24 +154,26 @@ export const reportsRouter = createRouter({
         .all();
     }),
 
-  lowStock: adminQuery
-    .input(z.object({ threshold: z.number().min(0).default(10) }).optional())
-    .query(({ input }) => {
-      const db = getDb();
-      const threshold = input?.threshold ?? 10;
-      return db
-        .select({
-          id: products.id,
-          name: products.name,
-          sku: products.sku,
-          unit: products.unit,
-          shop: stocks.shop,
-          qty: stocks.qty,
-        })
-        .from(stocks)
-        .innerJoin(products, eq(stocks.productId, products.id))
-        .where(and(eq(products.active, true), lt(stocks.qty, threshold)))
-        .orderBy(stocks.qty)
-        .all();
-    }),
+  // Products at or below their own low-stock level (each product has its own
+  // threshold, set on the product form).
+  lowStock: adminQuery.query(() => {
+    const db = getDb();
+    return db
+      .select({
+        id: products.id,
+        name: products.name,
+        sku: products.sku,
+        unit: products.unit,
+        shop: stocks.shop,
+        qty: stocks.qty,
+        lowStockAt: products.lowStockAt,
+      })
+      .from(stocks)
+      .innerJoin(products, eq(stocks.productId, products.id))
+      .where(
+        and(eq(products.active, true), sql`${stocks.qty} <= ${products.lowStockAt}`),
+      )
+      .orderBy(stocks.qty)
+      .all();
+  }),
 });

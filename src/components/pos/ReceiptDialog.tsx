@@ -172,23 +172,36 @@ export function ReceiptDialog({
               </div>
               <Rule />
               <div className="space-y-0.5">
-                {data.items.map((item) => (
-                  <div key={item.id} className="flex uppercase">
-                    <span className="flex-1 pr-1 truncate">
-                      {item.name}
-                      {item.priceType === "wholesale" ? " (W)" : ""}
-                    </span>
-                    <span className="w-8 text-right">
-                      {formatQty(item.qty)}
-                    </span>
-                    <span className="w-14 text-right">
-                      {formatAmount2(item.unitPrice)}
-                    </span>
-                    <span className="w-16 text-right">
-                      {formatAmount2(item.lineTotal)}
-                    </span>
-                  </div>
-                ))}
+                {data.items.map((item) => {
+                  // Pack sales show the pack count and pack price; the stored
+                  // qty stays in base units for stock accounting.
+                  const packs =
+                    item.packName && item.packUnits && item.packUnits > 0
+                      ? item.qty / item.packUnits
+                      : null;
+                  const shownQty = packs ?? item.qty;
+                  const shownPrice =
+                    packs !== null && packs > 0
+                      ? Math.round(item.lineTotal / packs)
+                      : item.unitPrice;
+                  return (
+                    <div key={item.id} className="flex uppercase">
+                      <span className="flex-1 pr-1 truncate">
+                        {item.name}
+                        {item.packName ? ` (${item.packName})` : ""}
+                      </span>
+                      <span className="w-8 text-right">
+                        {formatQty(shownQty)}
+                      </span>
+                      <span className="w-14 text-right">
+                        {formatAmount2(shownPrice)}
+                      </span>
+                      <span className="w-16 text-right">
+                        {formatAmount2(item.lineTotal)}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               <Rule />
               <div className="space-y-0.5">

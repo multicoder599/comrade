@@ -5,7 +5,6 @@ import type {
   CartTab,
   CatalogProduct,
   PendingPayment,
-  PriceType,
 } from "./types";
 
 // Cashier tabs are kept in localStorage per shop so an accidental refresh
@@ -16,30 +15,31 @@ type StoredLine = Partial<CartLine> & {
   qty: number;
   unitPrice: number;
   listPrice: number;
+  /** pre-1.7 lines had a retail/wholesale price type — folded into the key */
+  priceType?: "retail" | "wholesale";
 };
 type StoredTab = Partial<CartTab> & {
   id: string;
   label: string;
-  mode?: "retail" | "wholesale"; // legacy field, folded into line priceType
+  mode?: "retail" | "wholesale"; // legacy field, dropped in 1.7
 };
 
 function normalizeTab(raw: StoredTab, index: number): CartTab {
-  const defaultType: PriceType = raw.mode === "wholesale" ? "wholesale" : "retail";
   const lines: CartLine[] = (Array.isArray(raw.lines) ? raw.lines : []).map(
     (l: StoredLine) => {
-      const priceType: PriceType =
-        l.priceType === "wholesale" ? "wholesale" : defaultType;
+      const pack = l.pack ?? null;
       return {
-        key: l.key ?? lineKey(l.productId, priceType, l.unitPrice),
+        key: l.key ?? lineKey(l.productId, pack?.id ?? null, l.unitPrice),
         productId: l.productId,
         name: l.name ?? "",
         unit: l.unit ?? "pc",
         qty: l.qty,
-        priceType,
+        pack,
         unitPrice: l.unitPrice,
         listPrice: l.listPrice,
         stockQty: l.stockQty ?? 0,
         allowBargain: l.allowBargain ?? true,
+        minPrice: l.minPrice ?? null,
       };
     },
   );
@@ -117,18 +117,28 @@ export function useCartTabs(shop: "A" | "B") {
   const addProduct = useCallback(
     (
       product: CatalogProduct,
-      opts: { priceType?: PriceType; qty?: number; unitPrice?: number } = {},
+      opts: {
+        qty?: number;
+        unitPrice?: number;
+        pack?: { id: number; name: string; units: number; price: number } | null;
+      } = {},
     ) => {
-      const priceType = opts.priceType ?? "retail";
+      const pack = opts.pack ?? null;
       updateTab(active.id, (tab) => {
         if (tab.pending) return tab; // locked while waiting for payment
-        const listPrice =
-          priceType === "retail" ? product.retailPrice : product.wholesalePrice;
-        const unitPrice = opts.unitPrice ?? product.lastSoldPrice ?? listPrice;
+        const listPrice = pack ? pack.price : product.retailPrice;
+        // Pack prices are fixed; per-unit lines prefill the last sold price,
+        // never below the product's price floor.
+        let unitPrice = pack
+          ? pack.price
+          : (opts.unitPrice ?? product.lastSoldPrice ?? listPrice);
+        if (product.minPrice != null && product.minPrice > 0) {
+          unitPrice = Math.max(unitPrice, product.minPrice);
+        }
         const qty = opts.qty ?? 1;
-        // Lines are keyed by price too: the same product at two different
+        // Lines are keyed by pack + price: the same product at two different
         // agreed prices becomes two lines, never a merged average.
-        const key = lineKey(product.id, priceType, unitPrice);
+        const key = lineKey(product.id, pack?.id ?? null, unitPrice);
         const existing = tab.lines.find((l) => l.key === key);
         if (existing) {
           return {
@@ -145,50 +155,14 @@ export function useCartTabs(shop: "A" | "B") {
           name: product.name,
           unit: product.unit,
           qty,
-          priceType,
+          pack: pack ? { id: pack.id, name: pack.name, units: pack.units } : null,
           unitPrice,
           listPrice,
           stockQty: product.stockQty,
           allowBargain: product.allowBargain,
+          minPrice: product.minPrice,
         };
         return { ...tab, notice: null, lines: [...tab.lines, line] };
-      });
-    },
-    [active.id, updateTab],
-  );
-
-  /** Flip a line between retail and wholesale pricing (re-priced to list). */
-  const setLinePriceType = useCallback(
-    (key: string, priceType: PriceType, catalog: CatalogProduct[]) => {
-      updateTab(active.id, (tab) => {
-        const line = tab.lines.find((l) => l.key === key);
-        if (!line || line.priceType === priceType) return tab;
-        const p = catalog.find((c) => c.id === line.productId);
-        if (!p) return tab;
-        const listPrice =
-          priceType === "retail" ? p.retailPrice : p.wholesalePrice;
-        // Flipping price type re-prices to the list price, so the key uses it.
-        const newKey = lineKey(line.productId, priceType, listPrice);
-        const mergeTarget = tab.lines.find((l) => l.key === newKey);
-        if (mergeTarget) {
-          // Same product already present at that price type — merge quantities.
-          return {
-            ...tab,
-            lines: tab.lines
-              .filter((l) => l.key !== key)
-              .map((l) =>
-                l.key === newKey ? { ...l, qty: l.qty + line.qty } : l,
-              ),
-          };
-        }
-        return {
-          ...tab,
-          lines: tab.lines.map((l) =>
-            l.key === key
-              ? { ...l, key: newKey, priceType, listPrice, unitPrice: listPrice }
-              : l,
-          ),
-        };
       });
     },
     [active.id, updateTab],
@@ -252,7 +226,6 @@ export function useCartTabs(shop: "A" | "B") {
     addTab,
     closeTab,
     addProduct,
-    setLinePriceType,
     updateLine,
     removeLine,
     clearActive,

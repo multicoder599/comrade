@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -9,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { trpc } from "@/providers/trpc";
+import { errorMessage } from "@/lib/auth";
 import { formatKes } from "@/lib/money";
 import {
   DebtDetailDialog,
@@ -16,7 +19,7 @@ import {
   DebtBalance,
 } from "@/components/pos/DebtDetailDialog";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
-import { Search } from "lucide-react";
+import { BookUser, Plus, Search, Trash2 } from "lucide-react";
 
 type StatusFilter = "active" | "open" | "partial" | "settled" | "all";
 
@@ -99,6 +102,8 @@ export default function Debts() {
         </div>
       </div>
 
+      <DebtCustomersSection />
+
       <div className="rounded-lg border border-border bg-card overflow-x-auto">
         <Table>
           <TableHeader>
@@ -173,5 +178,160 @@ export default function Debts() {
         businessName={settingsQuery.data?.businessName ?? "Comrade Shop"}
       />
     </div>
+  );
+}
+
+/**
+ * Debt customers register — only the admin adds or removes people here, and
+ * cashiers can sell on debt only to someone on this list.
+ */
+function DebtCustomersSection() {
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [shop, setShop] = useState<"A" | "B">("A");
+  const [error, setError] = useState<string | null>(null);
+
+  const customersQuery = trpc.debts.customers.useQuery();
+  const addCustomer = trpc.debts.addCustomer.useMutation({
+    onSuccess: () => {
+      customersQuery.refetch();
+      setName("");
+      setPhone("");
+      setError(null);
+    },
+    onError: (e) => setError(errorMessage(e)),
+  });
+  const removeCustomer = trpc.debts.removeCustomer.useMutation({
+    onSuccess: () => customersQuery.refetch(),
+    onError: (e) => window.alert(errorMessage(e)),
+  });
+
+  function submit() {
+    if (!name.trim() || phone.replace(/\D/g, "").length < 9) {
+      setError("Enter the customer's name and a valid phone number");
+      return;
+    }
+    addCustomer.mutate({ shop, name: name.trim(), phone: phone.trim() });
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <BookUser className="size-4 text-primary" />
+        <div>
+          <h2 className="font-display font-semibold">Debt customers</h2>
+          <p className="text-xs text-muted-foreground">
+            Cashiers can only sell on debt to people on this list.
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-[1fr_1fr_auto_auto] gap-2.5 items-end">
+        <div className="space-y-1.5">
+          <Label className="text-xs">Customer name</Label>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Mama Njoroge"
+            className="bg-background border-input h-9 text-sm"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Phone number</Label>
+          <Input
+            inputMode="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="0712 345 678"
+            className="bg-background border-input h-9 text-sm font-figures"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Shop</Label>
+          <div className="grid grid-cols-2 gap-1 rounded-md border border-border p-0.5 h-9">
+            {(["A", "B"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setShop(s)}
+                className={`rounded text-xs font-semibold transition-colors cursor-pointer ${
+                  shop === s
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+        <Button
+          size="sm"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 font-semibold h-9"
+          disabled={addCustomer.isPending || !name.trim() || !phone.trim()}
+          onClick={submit}
+        >
+          <Plus className="size-4 mr-1" />
+          {addCustomer.isPending ? "Adding…" : "Add customer"}
+        </Button>
+      </div>
+      {error && (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      {(customersQuery.data ?? []).length > 0 ? (
+        <ul className="rounded-md border border-border divide-y divide-border overflow-hidden">
+          {customersQuery.data!.map((c) => (
+            <li
+              key={c.id}
+              className="px-3 py-2 flex items-center justify-between gap-2 text-sm"
+            >
+              <span className="min-w-0">
+                <span className="font-medium">{c.name}</span>
+                <span className="text-xs text-muted-foreground font-figures ml-2">
+                  {c.phone}
+                </span>
+                <span className="text-xs text-muted-foreground ml-2">
+                  Shop {c.shop}
+                </span>
+              </span>
+              <span className="flex items-center gap-2 shrink-0">
+                {c.owes > 0 && (
+                  <span className="text-xs font-figures text-warning">
+                    owes {formatKes(c.owes)}
+                  </span>
+                )}
+                {c.credit > 0 && (
+                  <span className="text-xs font-figures text-success">
+                    credit {formatKes(c.credit)}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-muted-foreground hover:text-destructive"
+                  disabled={removeCustomer.isPending}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `Remove ${c.name} from the debt list? They will no longer be able to buy on debt.`,
+                      )
+                    ) {
+                      removeCustomer.mutate({ id: c.id });
+                    }
+                  }}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No customers registered yet — add the first one above.
+        </p>
+      )}
+    </section>
   );
 }

@@ -191,13 +191,33 @@ export default function Pos() {
     const hit =
       catalog.find((p) => p.barcode === code) ??
       catalog.find((p) => p.sku.toLowerCase() === code.toLowerCase());
-    if (!hit) {
+    // A pack's own barcode scans straight in as one pack at the pack price.
+    const packHit = hit
+      ? null
+      : catalog
+          .flatMap((p) => p.packages.map((pk) => ({ product: p, pack: pk })))
+          .find((x) => x.pack.barcode === code);
+    if (!hit && !packHit) {
       flashScanNotice(`No product matches "${code}"`);
-    } else if (hit.stockQty <= 0) {
-      flashScanNotice(`"${hit.name}" is out of stock`);
-    } else {
-      cart.addProduct(hit);
-      flashScanNotice(`Added ${hit.name}`);
+    } else if (hit) {
+      if (hit.stockQty <= 0) {
+        flashScanNotice(`"${hit.name}" is out of stock`);
+      } else {
+        cart.addProduct(hit);
+        flashScanNotice(`Added ${hit.name}`);
+      }
+    } else if (packHit) {
+      const { product, pack: pk } = packHit;
+      if (product.stockQty < pk.qty) {
+        flashScanNotice(
+          `Not enough ${product.name} for a ${pk.name} (${formatQty(product.stockQty)} ${product.unit} left)`,
+        );
+      } else {
+        cart.addProduct(product, {
+          pack: { id: pk.id, name: pk.name, units: pk.qty, price: pk.price },
+        });
+        flashScanNotice(`Added ${product.name} — ${pk.name}`);
+      }
     }
     setScanText("");
     scanInputRef.current?.focus();
@@ -394,15 +414,17 @@ export default function Pos() {
                           </span>
                           <span
                             className={`text-[11px] ${
-                              p.stockQty <= 5 ? "text-warning" : "text-muted-foreground"
+                              p.stockQty <= p.lowStockAt ? "text-warning" : "text-muted-foreground"
                             }`}
                           >
                             {out ? "Out of stock" : `${formatQty(p.stockQty)} ${p.unit}`}
                           </span>
                         </div>
-                        {p.wholesalePrice > 0 && p.wholesalePrice !== p.retailPrice && (
-                          <p className="mt-1 text-[10px] font-figures text-warning">
-                            W {formatKes(p.wholesalePrice)}
+                        {p.packages.length > 0 && (
+                          <p className="mt-1 text-[10px] font-figures text-warning truncate">
+                            {p.packages
+                              .map((pk) => `${pk.name} ${formatKes(pk.price)}`)
+                              .join(" · ")}
                           </p>
                         )}
                       </button>
@@ -425,7 +447,6 @@ export default function Pos() {
                   onClose={() => cart.closeTab(tab.id)}
                   onQty={(key, qty) => cart.updateLine(key, { qty })}
                   onPrice={(key, unitPrice) => cart.updateLine(key, { unitPrice })}
-                  onPriceType={(key, pt) => cart.setLinePriceType(key, pt, catalog)}
                   onRemoveLine={(key) => cart.removeLine(key)}
                   onDiscount={(discount) =>
                     cart.updateTab(tab.id, (t) => ({
@@ -570,7 +591,6 @@ type CartColumnProps = {
   onClose: () => void;
   onQty: (key: string, qty: number) => void;
   onPrice: (key: string, unitPrice: number) => void;
-  onPriceType: (key: string, priceType: "retail" | "wholesale") => void;
   onRemoveLine: (key: string) => void;
   onDiscount: (discount: number) => void;
   onClear: () => void;
@@ -587,7 +607,6 @@ function CartColumn({
   onClose,
   onQty,
   onPrice,
-  onPriceType,
   onRemoveLine,
   onDiscount,
   onClear,
@@ -710,7 +729,6 @@ function CartColumn({
                     line={line}
                     onQty={(qty) => onQty(line.key, qty)}
                     onPrice={(unitPrice) => onPrice(line.key, unitPrice)}
-                    onPriceType={(pt) => onPriceType(line.key, pt)}
                     onRemove={() => onRemoveLine(line.key)}
                   />
                 ))}
@@ -775,24 +793,31 @@ function CartLineRow({
   line,
   onQty,
   onPrice,
-  onPriceType,
   onRemove,
 }: {
   line: CartLine;
   onQty: (qty: number) => void;
   onPrice: (price: number) => void;
-  onPriceType: (priceType: "retail" | "wholesale") => void;
   onRemove: () => void;
 }) {
   const [priceText, setPriceText] = useState<string | null>(null);
   const [qtyText, setQtyText] = useState<string | null>(null);
   const bargained = line.unitPrice !== line.listPrice;
+  // Pack lines have a fixed pack price — only the pack count is editable.
+  const priceEditable = !line.pack && line.allowBargain;
+  const belowFloor =
+    !line.pack && line.minPrice != null && line.minPrice > 0 && line.unitPrice < line.minPrice;
 
   return (
     <li className="px-2.5 py-2 space-y-1.5">
       <div className="flex items-start justify-between gap-2">
         <p className="text-[13px] font-medium leading-snug min-w-0">
           {line.name}
+          {line.pack && (
+            <span className="block text-[10px] font-figures font-normal text-warning">
+              {line.pack.name} × {formatQty(line.pack.units)} {line.unit}
+            </span>
+          )}
         </p>
         <button
           type="button"
@@ -832,36 +857,23 @@ function CartLineRow({
             onClick={() => onQty(line.qty + 1)}
             icon={<Plus className="size-3" />}
           />
-        </div>
-        {/* Retail / wholesale pick for this line */}
-        <div className="flex rounded border border-border overflow-hidden shrink-0">
-          {(["retail", "wholesale"] as const).map((pt) => (
-            <button
-              key={pt}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onPriceType(pt);
-              }}
-              className={`px-1.5 py-0.5 text-[10px] font-semibold uppercase cursor-pointer transition-colors ${
-                line.priceType === pt
-                  ? pt === "wholesale"
-                    ? "bg-warning text-warning-foreground"
-                    : "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {pt === "retail" ? "R" : "W"}
-            </button>
-          ))}
+          {line.pack && (
+            <span className="text-[10px] text-muted-foreground ml-1">
+              {line.qty === 1 ? line.pack.name : `${line.pack.name}s`}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
-          {line.allowBargain ? (
+          {priceEditable ? (
             <div className="relative">
               <Input
                 aria-label={`Price for ${line.name}`}
                 className={`w-16 h-7 font-figures text-right text-xs bg-background ${
-                  bargained ? "border-warning text-warning" : "border-input"
+                  belowFloor
+                    ? "border-destructive text-destructive"
+                    : bargained
+                      ? "border-warning text-warning"
+                      : "border-input"
                 }`}
                 inputMode="decimal"
                 value={priceText ?? formatPlain(line.unitPrice)}
@@ -876,6 +888,11 @@ function CartLineRow({
               {bargained && (
                 <span className="absolute -top-3.5 right-0 text-[9px] text-warning line-through font-figures">
                   {formatPlain(line.listPrice)}
+                </span>
+              )}
+              {belowFloor && (
+                <span className="absolute -bottom-4 right-0 text-[9px] text-destructive font-figures whitespace-nowrap">
+                  min {formatPlain(line.minPrice!)}
                 </span>
               )}
             </div>
@@ -900,8 +917,9 @@ function parseQty(text: string): number | null {
 }
 
 /**
- * Shown the moment a product tile is tapped: the cashier confirms or edits
- * the final ("last") price and quantity before the item lands in the cart.
+ * Shown the moment a product tile is tapped: the cashier picks a packaging
+ * option (single units or a pack like "Crate of 30"), confirms or edits the
+ * final price and the quantity before the item lands in the cart.
  * This keeps every line's price exact — with several products in one sale,
  * a single whole-cart bargain could never be attributed per product.
  * (Barcode scans skip this dialog for speed and reuse the last sold price.)
@@ -916,9 +934,9 @@ function AddPriceDialog({
   onAdd: (
     product: CatalogProduct,
     opts: {
-      priceType: "retail" | "wholesale";
       qty: number;
       unitPrice: number;
+      pack: { id: number; name: string; units: number; price: number } | null;
     },
   ) => void;
 }) {
@@ -930,7 +948,7 @@ function AddPriceDialog({
             {product?.name ?? "Add product"}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            Confirm the price and quantity before adding to the cart
+            Confirm the packaging, price and quantity before adding to the cart
           </DialogDescription>
         </DialogHeader>
         {product && (
@@ -949,15 +967,14 @@ function AddPriceForm({
   onAdd: (
     product: CatalogProduct,
     opts: {
-      priceType: "retail" | "wholesale";
       qty: number;
       unitPrice: number;
+      pack: { id: number; name: string; units: number; price: number } | null;
     },
   ) => void;
 }) {
-  const [priceType, setPriceType] = useState<"retail" | "wholesale">("retail");
-  const listPrice =
-    priceType === "retail" ? product.retailPrice : product.wholesalePrice;
+  // null = selling single units; otherwise the selected packaging option.
+  const [pack, setPack] = useState<CatalogProduct["packages"][number] | null>(null);
   const [priceText, setPriceText] = useState(() =>
     formatPlain(product.lastSoldPrice ?? product.retailPrice),
   );
@@ -965,51 +982,65 @@ function AddPriceForm({
 
   const price = parseKes(priceText);
   const qty = parseQty(qtyText);
-  const priceLocked = !product.allowBargain;
-  const effectivePrice = priceLocked ? listPrice : price;
-  const valid = effectivePrice !== null && effectivePrice > 0 && qty !== null;
-  const hasWholesale =
-    product.wholesalePrice > 0 && product.wholesalePrice !== product.retailPrice;
-
-  function flipPriceType(pt: "retail" | "wholesale") {
-    setPriceType(pt);
-    // Re-price to the target list price; the cashier can still edit after.
-    setPriceText(
-      formatPlain(pt === "retail" ? product.retailPrice : product.wholesalePrice),
-    );
-  }
+  const floor = product.minPrice != null && product.minPrice > 0 ? product.minPrice : null;
+  // Pack prices are fixed; per-unit lines respect bargaining + the price floor.
+  const priceLocked = pack !== null || !product.allowBargain;
+  const effectivePrice = pack ? pack.price : priceLocked ? product.retailPrice : price;
+  const belowFloor = !pack && floor !== null && effectivePrice !== null && effectivePrice < floor;
+  const stockShort =
+    qty !== null &&
+    (pack ? qty * pack.qty > product.stockQty : qty > product.stockQty);
+  const valid =
+    effectivePrice !== null && effectivePrice > 0 && qty !== null && !belowFloor;
 
   function submit(e?: React.FormEvent) {
     e?.preventDefault();
     if (!valid) return;
-    onAdd(product, { priceType, qty: qty!, unitPrice: effectivePrice! });
+    onAdd(product, {
+      qty: qty!,
+      unitPrice: effectivePrice!,
+      pack: pack ? { id: pack.id, name: pack.name, units: pack.qty, price: pack.price } : null,
+    });
   }
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      {hasWholesale && (
-        <div className="grid grid-cols-2 gap-1 rounded-md border border-border p-1">
-          {(["retail", "wholesale"] as const).map((pt) => (
+      {/* Packaging: sell single units or whole packs */}
+      <div className="space-y-1.5">
+        <Label>Selling as</Label>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => setPack(null)}
+            className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+              pack === null
+                ? "border-primary bg-primary/15 text-primary"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Per {product.unit} · {formatKes(product.retailPrice)}
+          </button>
+          {product.packages.map((pk) => (
             <button
-              key={pt}
+              key={pk.id}
               type="button"
-              onClick={() => flipPriceType(pt)}
-              className={`rounded px-2 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors cursor-pointer ${
-                priceType === pt
-                  ? pt === "wholesale"
-                    ? "bg-warning text-warning-foreground"
-                    : "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
+              onClick={() => setPack(pk)}
+              className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                pack?.id === pk.id
+                  ? "border-warning bg-warning/15 text-warning"
+                  : "border-border text-muted-foreground hover:text-foreground"
               }`}
             >
-              {pt === "retail" ? "Retail" : "Wholesale"}
+              {pk.name} ({formatQty(pk.qty)}) · {formatKes(pk.price)}
             </button>
           ))}
         </div>
-      )}
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <Label htmlFor="add-qty">Quantity</Label>
+          <Label htmlFor="add-qty">
+            {pack ? `${pack.name}s` : `Quantity (${product.unit})`}
+          </Label>
           <Input
             id="add-qty"
             inputMode="decimal"
@@ -1019,25 +1050,47 @@ function AddPriceForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="add-price">Last price (KES)</Label>
+          <Label htmlFor="add-price">
+            {pack ? `Price per ${pack.name} (KES)` : "Last price (KES)"}
+          </Label>
           <Input
             id="add-price"
             inputMode="decimal"
             autoFocus
             readOnly={priceLocked}
-            value={priceLocked ? formatPlain(listPrice) : priceText}
+            value={
+              pack
+                ? formatPlain(pack.price)
+                : priceLocked
+                  ? formatPlain(product.retailPrice)
+                  : priceText
+            }
             onChange={(e) => setPriceText(e.target.value)}
-            className="bg-background border-input h-12 font-figures text-lg text-right"
+            className={`bg-background h-12 font-figures text-lg text-right ${
+              belowFloor ? "border-destructive text-destructive" : "border-input"
+            }`}
           />
         </div>
       </div>
       <p className="text-xs text-muted-foreground -mt-1">
-        {priceLocked
-          ? "Fixed price — bargaining is off for this product."
-          : product.lastSoldPrice !== null
-            ? `Prefilled with the last price this sold at (list ${formatKes(listPrice)}).`
-            : `List price ${formatKes(listPrice)} — type the agreed price if different.`}
+        {pack
+          ? `1 ${pack.name} = ${formatQty(pack.qty)} ${product.unit} — stock is deducted in ${product.unit}.`
+          : priceLocked
+            ? "Fixed price — bargaining is off for this product."
+            : product.lastSoldPrice !== null
+              ? `Prefilled with the last price this sold at (list ${formatKes(product.retailPrice)}).`
+              : `List price ${formatKes(product.retailPrice)} — type the agreed price if different.`}
       </p>
+      {belowFloor && (
+        <p className="text-xs text-destructive -mt-1">
+          Cannot sell below the minimum price of {formatKes(floor!)}.
+        </p>
+      )}
+      {stockShort && (
+        <p className="text-xs text-warning -mt-1">
+          Only {formatQty(product.stockQty)} {product.unit} in stock.
+        </p>
+      )}
       <div className="rounded-md border border-border bg-secondary/60 px-4 py-2.5 flex items-center justify-between">
         <span className="text-sm text-muted-foreground">Line total</span>
         <span className="font-figures text-xl font-semibold">

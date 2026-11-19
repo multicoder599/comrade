@@ -65,15 +65,19 @@ export function CheckoutDialog({
   const [splitRemainder, setSplitRemainder] = useState<"megapay" | "debt">(
     "megapay",
   );
-  const [debtName, setDebtName] = useState("");
-  const [debtPhone, setDebtPhone] = useState("");
+  // Debt customers are registered by the admin — the cashier only picks from
+  // the list, never types a new one.
+  const [debtCustomer, setDebtCustomer] = useState<{
+    name: string;
+    phone: string;
+  } | null>(null);
   const [bargainText, setBargainText] = useState("");
   const [busy, setBusy] = useState(false);
 
   const checkout = trpc.sales.checkout.useMutation();
   const utils = trpc.useUtils();
-  // Known debt customers for this shop — lets the cashier add to an existing
-  // tab instead of creating a duplicate.
+  // Registered debt customers for this shop — the cashier can only sell on
+  // debt to someone the admin has added.
   const customersQuery = trpc.debts.customers.useQuery(undefined, {
     enabled:
       open && (phase.step === "debt" || phase.step === "split"),
@@ -86,8 +90,7 @@ export function CheckoutDialog({
       setPhone("");
       setCashPartText("");
       setSplitRemainder(megapayEnabled ? "megapay" : "debt");
-      setDebtName("");
-      setDebtPhone("");
+      setDebtCustomer(null);
       setBargainText("");
       setBusy(false);
     }
@@ -97,8 +100,8 @@ export function CheckoutDialog({
     tab.lines.map((l) => ({
       productId: l.productId,
       qty: l.qty,
-      priceType: l.priceType,
-      unitPrice: l.unitPrice,
+      ...(l.pack ? { packId: l.pack.id } : {}),
+      ...(l.pack ? {} : { unitPrice: l.unitPrice }),
     }));
 
   async function runCheckout(
@@ -157,7 +160,6 @@ export function CheckoutDialog({
       : null;
 
   const phoneValid = phone.replace(/\D/g, "").length >= 9;
-  const debtPhoneValid = debtPhone.replace(/\D/g, "").length >= 9;
 
   const mpesaNote = megapayEnabled
     ? "Send STK push to the customer's phone"
@@ -238,7 +240,7 @@ export function CheckoutDialog({
               <span className="text-left min-w-0">
                 <span className="block font-semibold">Debt · Pay later</span>
                 <span className="block text-xs text-muted-foreground whitespace-normal break-words">
-                  Record the customer's name & phone — collect later
+                  Only for customers the admin has registered — collect later
                 </span>
               </span>
             </Button>
@@ -517,63 +519,12 @@ export function CheckoutDialog({
                 />
               </div>
             ) : (
-              <div className="space-y-3">
-                {(customersQuery.data?.length ?? 0) > 0 && (
-                  <div className="max-h-28 overflow-y-auto rounded-md border border-border divide-y divide-border">
-                    {customersQuery.data!.map((c) => {
-                      const selected = debtPhone === c.phone;
-                      return (
-                        <button
-                          key={c.phone}
-                          type="button"
-                          onClick={() => {
-                            setDebtName(c.name);
-                            setDebtPhone(c.phone);
-                          }}
-                          className={`w-full px-3 py-1.5 flex items-center justify-between gap-2 text-left text-sm transition-colors cursor-pointer ${
-                            selected ? "bg-primary/10" : "hover:bg-secondary"
-                          }`}
-                        >
-                          <span className="min-w-0 truncate">
-                            {c.name}
-                            <span className="text-xs text-muted-foreground font-figures ml-1.5">
-                              {c.phone}
-                            </span>
-                          </span>
-                          {c.owes > 0 && (
-                            <span className="shrink-0 text-xs font-figures text-warning">
-                              owes {formatKes(c.owes)}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="split-debt-name">Customer name</Label>
-                    <Input
-                      id="split-debt-name"
-                      placeholder="e.g. Mama Njoroge"
-                      value={debtName}
-                      onChange={(e) => setDebtName(e.target.value)}
-                      className="bg-background border-input h-11"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="split-debt-phone">Phone number</Label>
-                    <Input
-                      id="split-debt-phone"
-                      inputMode="tel"
-                      placeholder="0712 345 678"
-                      value={debtPhone}
-                      onChange={(e) => setDebtPhone(e.target.value)}
-                      className="bg-background border-input h-11 font-figures"
-                    />
-                  </div>
-                </div>
-              </div>
+              <DebtCustomerPicker
+                customers={customersQuery.data ?? []}
+                loading={customersQuery.isLoading}
+                selected={debtCustomer}
+                onSelect={setDebtCustomer}
+              />
             )}
             <div className="flex gap-2">
               <Button
@@ -593,7 +544,7 @@ export function CheckoutDialog({
                   (splitTendered !== null && splitTendered < cashPart) ||
                   (splitRemainder === "megapay"
                     ? !phoneValid
-                    : !debtName.trim() || !debtPhoneValid)
+                    : debtCustomer === null)
                 }
                 onClick={() =>
                   runCheckout({
@@ -604,9 +555,9 @@ export function CheckoutDialog({
                     tendered: splitTendered ?? cashPart ?? 0,
                     remainder: splitRemainder,
                     customerPhone:
-                      splitRemainder === "megapay" ? phone : debtPhone.trim(),
+                      splitRemainder === "megapay" ? phone : debtCustomer!.phone,
                     customerName:
-                      splitRemainder === "debt" ? debtName.trim() : undefined,
+                      splitRemainder === "debt" ? debtCustomer!.name : undefined,
                   })
                 }
               >
@@ -624,91 +575,12 @@ export function CheckoutDialog({
 
         {phase.step === "debt" && (
           <div className="space-y-4">
-            {(customersQuery.data?.length ?? 0) > 0 && (
-              <div className="space-y-1.5">
-                <p className="micro-label">Existing customers — tap to add to their tab</p>
-                <div className="max-h-36 overflow-y-auto rounded-md border border-border divide-y divide-border">
-                  {customersQuery.data!.map((c) => {
-                    const selected = debtPhone === c.phone;
-                    return (
-                      <button
-                        key={c.phone}
-                        type="button"
-                        onClick={() => {
-                          setDebtName(c.name);
-                          setDebtPhone(c.phone);
-                        }}
-                        className={`w-full px-3 py-2 flex items-center justify-between gap-2 text-left text-sm transition-colors cursor-pointer ${
-                          selected ? "bg-primary/10" : "hover:bg-secondary"
-                        }`}
-                      >
-                        <span className="min-w-0">
-                          <span className="block font-medium truncate">
-                            {c.name}
-                          </span>
-                          <span className="block text-xs text-muted-foreground font-figures">
-                            {c.phone}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-xs font-figures text-right">
-                          {c.owes > 0 && (
-                            <span className="block text-warning">
-                              owes {formatKes(c.owes)}
-                            </span>
-                          )}
-                          {c.credit > 0 && (
-                            <span className="block text-success">
-                              credit {formatKes(c.credit)}
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="debt-name">Customer name</Label>
-              <Input
-                id="debt-name"
-                autoFocus
-                placeholder="e.g. Mama Njoroge"
-                value={debtName}
-                onChange={(e) => setDebtName(e.target.value)}
-                className="bg-background border-input h-11"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="debt-phone">Phone number</Label>
-              <Input
-                id="debt-phone"
-                inputMode="tel"
-                placeholder="0712 345 678"
-                value={debtPhone}
-                onChange={(e) => setDebtPhone(e.target.value)}
-                className="bg-background border-input h-11 font-figures"
-              />
-              {(() => {
-                const known = customersQuery.data?.find(
-                  (c) => c.phone === debtPhone.trim(),
-                );
-                if (known) {
-                  return (
-                    <p className="text-xs text-success">
-                      Existing customer — this sale is added to their tab.
-                      {known.credit > 0 &&
-                        ` ${formatKes(known.credit)} store credit applies automatically.`}
-                    </p>
-                  );
-                }
-                return (
-                  <p className="text-xs text-muted-foreground">
-                    New customer — a tab is opened in the Debts section.
-                  </p>
-                );
-              })()}
-            </div>
+            <DebtCustomerPicker
+              customers={customersQuery.data ?? []}
+              loading={customersQuery.isLoading}
+              selected={debtCustomer}
+              onSelect={setDebtCustomer}
+            />
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -719,14 +591,14 @@ export function CheckoutDialog({
               </Button>
               <Button
                 className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
-                disabled={busy || !debtName.trim() || !debtPhoneValid}
+                disabled={busy || debtCustomer === null}
                 onClick={() =>
                   runCheckout({
                     paymentMethod: "debt",
                     lines: linesPayload(),
                     discount: effectiveDiscount,
-                    customerName: debtName.trim(),
-                    customerPhone: debtPhone.trim(),
+                    customerName: debtCustomer!.name,
+                    customerPhone: debtCustomer!.phone,
                   })
                 }
               >
@@ -755,6 +627,79 @@ export function CheckoutDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+type DebtCustomer = { name: string; phone: string };
+
+/** Pick-from-list only: debt customers are registered by the admin. */
+function DebtCustomerPicker({
+  customers,
+  loading,
+  selected,
+  onSelect,
+}: {
+  customers: { name: string; phone: string; owes: number; credit: number }[];
+  loading: boolean;
+  selected: DebtCustomer | null;
+  onSelect: (c: DebtCustomer) => void;
+}) {
+  if (loading) {
+    return (
+      <p className="text-sm text-muted-foreground py-3 text-center">
+        Loading debt customers…
+      </p>
+    );
+  }
+  if (customers.length === 0) {
+    return (
+      <div className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+        No debt customers registered for this shop yet — ask the admin to add
+        the customer from the Debts page first.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      <p className="micro-label">Debt customer — registered by the admin</p>
+      <div className="max-h-36 overflow-y-auto rounded-md border border-border divide-y divide-border">
+        {customers.map((c) => {
+          const isSelected = selected?.phone === c.phone;
+          return (
+            <button
+              key={c.phone}
+              type="button"
+              onClick={() => onSelect({ name: c.name, phone: c.phone })}
+              className={`w-full px-3 py-2 flex items-center justify-between gap-2 text-left text-sm transition-colors cursor-pointer ${
+                isSelected ? "bg-primary/10" : "hover:bg-secondary"
+              }`}
+            >
+              <span className="min-w-0">
+                <span className="block font-medium truncate">{c.name}</span>
+                <span className="block text-xs text-muted-foreground font-figures">
+                  {c.phone}
+                </span>
+              </span>
+              <span className="shrink-0 text-xs font-figures text-right">
+                {c.owes > 0 && (
+                  <span className="block text-warning">owes {formatKes(c.owes)}</span>
+                )}
+                {c.credit > 0 && (
+                  <span className="block text-success">
+                    credit {formatKes(c.credit)}
+                  </span>
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {selected && (
+        <p className="text-xs text-success">
+          {selected.name} selected — this sale goes onto their tab.
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -163,29 +163,35 @@ export function DebtDetailDialog({
                     : ""}
                 </p>
                 <ul className="rounded-md border border-border divide-y divide-border overflow-hidden">
-                  {data.items.map((item) => (
-                    <li
-                      key={item.id}
-                      className="px-3 py-2 flex items-center justify-between gap-2 text-sm"
-                    >
-                      <span className="truncate">
-                        {item.name}
-                        <span className="text-muted-foreground">
-                          {" "}
-                          ×{formatQty(item.qty)} @ {formatPlain(item.unitPrice)}
-                        </span>
-                        {item.priceType === "wholesale" && (
-                          <span className="text-warning text-[10px] font-semibold uppercase">
+                  {data.items.map((item) => {
+                    const packs =
+                      item.packName && item.packUnits && item.packUnits > 0
+                        ? item.qty / item.packUnits
+                        : null;
+                    return (
+                      <li
+                        key={item.id}
+                        className="px-3 py-2 flex items-center justify-between gap-2 text-sm"
+                      >
+                        <span className="truncate">
+                          {item.name}
+                          <span className="text-muted-foreground">
                             {" "}
-                            W
+                            ×{formatQty(packs ?? item.qty)}
+                            {item.packName ? ` ${item.packName}` : ""} @{" "}
+                            {formatPlain(
+                              packs !== null && packs > 0
+                                ? Math.round(item.lineTotal / packs)
+                                : item.unitPrice,
+                            )}
                           </span>
-                        )}
-                      </span>
-                      <span className="font-figures shrink-0">
-                        {formatKes(item.lineTotal)}
-                      </span>
-                    </li>
-                  ))}
+                        </span>
+                        <span className="font-figures shrink-0">
+                          {formatKes(item.lineTotal)}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
                 {onReceipt && data.linkedSales.length > 0 && (
                   <div className="flex gap-1.5 mt-1.5 flex-wrap">

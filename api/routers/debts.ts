@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, like, ne, or, sql } from "drizzle-orm";
-import { debtPayments, debts, saleItems, sales } from "@db/schema";
+import { customers, debtPayments, debts, saleItems, sales } from "@db/schema";
 import { getDb } from "../queries/connection";
-import { createRouter, authedQuery } from "../middleware";
+import { createRouter, authedQuery, adminQuery } from "../middleware";
 import { customerCredit } from "./sales";
 
 // Customer debts: goods taken on credit, paid back over time. Overpaying a
@@ -54,39 +54,108 @@ export const debtsRouter = createRouter({
         .all();
     }),
 
-  // Known debt customers (for the checkout picker): anyone with an unpaid tab
-  // or unused store credit.
+  // Registered debt customers (for the checkout picker and the admin's
+  // customer list). Only the admin can add people here — a cashier can sell
+  // on debt only to someone on this list. Each entry carries the customer's
+  // current balance (owes) and unused store credit.
   customers: authedQuery.query(({ ctx }) => {
     const db = getDb();
     const shop = ctx.user.role === "cashier" ? ctx.user.shop : undefined;
+    const registered = db
+      .select()
+      .from(customers)
+      .where(shop ? eq(customers.shop, shop) : undefined)
+      .orderBy(customers.name)
+      .all();
     const rows = db
       .select()
       .from(debts)
       .where(and(shop ? eq(debts.shop, shop) : undefined, ne(debts.status, "cancelled")))
       .orderBy(desc(debts.id))
       .all();
-    const byPhone = new Map<
-      string,
-      { name: string; phone: string; owes: number; credit: number }
-    >();
+    const owesByPhone = new Map<string, number>();
     for (const d of rows) {
-      const entry =
-        byPhone.get(d.customerPhone) ??
-        { name: d.customerName, phone: d.customerPhone, owes: 0, credit: 0 };
-      entry.name = d.customerName; // latest row wins (most recent spelling)
       if (d.status === "open" || d.status === "partial") {
-        entry.owes += Math.max(0, d.amount - d.amountPaid);
+        owesByPhone.set(
+          d.customerPhone,
+          (owesByPhone.get(d.customerPhone) ?? 0) + Math.max(0, d.amount - d.amountPaid),
+        );
       }
-      byPhone.set(d.customerPhone, entry);
     }
-    const result = [];
-    for (const entry of byPhone.values()) {
-      if (!shop) continue;
-      entry.credit = customerCredit(db, shop, entry.phone);
-      if (entry.owes > 0 || entry.credit > 0) result.push(entry);
-    }
-    return result.sort((a, b) => b.owes - a.owes);
+    return registered
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        shop: c.shop,
+        owes: owesByPhone.get(c.phone) ?? 0,
+        credit: customerCredit(db, c.shop, c.phone),
+      }))
+      .sort((a, b) => b.owes - a.owes);
   }),
+
+  // Admin-only: register a customer so cashiers can sell to them on debt.
+  addCustomer: adminQuery
+    .input(
+      z.object({
+        shop: z.enum(["A", "B"]),
+        name: z.string().min(1).max(80),
+        phone: z.string().min(6).max(20),
+      }),
+    )
+    .mutation(({ input }) => {
+      const db = getDb();
+      const phone = input.phone.trim();
+      const existing = db
+        .select()
+        .from(customers)
+        .where(and(eq(customers.shop, input.shop), eq(customers.phone, phone)))
+        .get();
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `${existing.name} is already registered with this phone number in Shop ${input.shop}`,
+        });
+      }
+      const info = db
+        .insert(customers)
+        .values({ shop: input.shop, name: input.name.trim(), phone })
+        .run();
+      return { id: Number(info.lastInsertRowid) };
+    }),
+
+  // Admin-only: take a customer off the debt list. Blocked while they still
+  // owe money — settle the debt first.
+  removeCustomer: adminQuery
+    .input(z.object({ id: z.number().int() }))
+    .mutation(({ input }) => {
+      const db = getDb();
+      const customer = db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, input.id))
+        .get();
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND" });
+      const open = db
+        .select({ id: debts.id })
+        .from(debts)
+        .where(
+          and(
+            eq(debts.shop, customer.shop),
+            eq(debts.customerPhone, customer.phone),
+            or(eq(debts.status, "open"), eq(debts.status, "partial")),
+          ),
+        )
+        .get();
+      if (open) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `${customer.name} still has an unpaid debt — settle it before removing them`,
+        });
+      }
+      db.delete(customers).where(eq(customers.id, input.id)).run();
+      return { ok: true };
+    }),
 
   // Outstanding totals per shop (for dashboard badges).
   summary: authedQuery.query(({ ctx }) => {

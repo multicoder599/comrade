@@ -35,6 +35,12 @@ export const products = sqliteTable("products", {
   wholesaleMinQty: real("wholesale_min_qty").notNull().default(1),
   // Last price this product actually sold at — set after bargained sales.
   lastSoldPrice: integer("last_sold_price"),
+  // Per-product low-stock alert threshold (in base units). When a shop's
+  // stock drops to this level, the till and dashboard flag it.
+  lowStockAt: real("low_stock_at").notNull().default(5),
+  // Price floor in cents per base unit — the till refuses a sale below this.
+  // NULL/0 means no floor.
+  minPrice: integer("min_price"),
   allowBargain: integer("allow_bargain", { mode: "boolean" })
     .notNull()
     .default(true),
@@ -45,6 +51,20 @@ export const products = sqliteTable("products", {
   updatedAt: text("updated_at")
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
+});
+
+// Packaging options: a product stocked in base units (e.g. single eggs) can
+// also be sold as a pack (e.g. crate of 30) at its own price. Stock is always
+// tracked in base units; selling a pack deducts qty × pack size.
+export const productPackages = sqliteTable("product_packages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  productId: integer("product_id")
+    .notNull()
+    .references(() => products.id),
+  name: text("name").notNull(), // e.g. "Crate", "Pack of 6"
+  qty: real("qty").notNull(), // base units in one pack, e.g. 30
+  price: integer("price").notNull(), // cents per pack
+  barcode: text("barcode"), // optional: scan the pack directly
 });
 
 export const stocks = sqliteTable(
@@ -111,6 +131,22 @@ export const saleItems = sqliteTable("sale_items", {
   listPrice: integer("list_price").notNull(),
   buyingPrice: integer("buying_price").notNull(),
   lineTotal: integer("line_total").notNull(),
+  // Set when the line was sold as a pack: qty is still base units (stock and
+  // cost stay exact); pack_name/pack_units let the receipt show "2 crates".
+  packName: text("pack_name"),
+  packUnits: real("pack_units"),
+});
+
+// Customers registered for debt purchases. Only the admin creates them — a
+// cashier can sell on debt only to someone on this list.
+export const customers = sqliteTable("customers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  shop: text("shop", { enum: ["A", "B"] }).notNull(),
+  name: text("name").notNull(),
+  phone: text("phone").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
 });
 
 // Customer debts: goods taken now, paid later.
@@ -157,8 +193,10 @@ export const settings = sqliteTable("settings", {
 
 export type User = typeof users.$inferSelect;
 export type Product = typeof products.$inferSelect;
+export type ProductPackage = typeof productPackages.$inferSelect;
 export type Stock = typeof stocks.$inferSelect;
 export type Sale = typeof sales.$inferSelect;
 export type SaleItem = typeof saleItems.$inferSelect;
 export type Debt = typeof debts.$inferSelect;
 export type DebtPayment = typeof debtPayments.$inferSelect;
+export type Customer = typeof customers.$inferSelect;

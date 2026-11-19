@@ -8,7 +8,7 @@ import { AlertTriangle } from "lucide-react";
 export default function Dashboard() {
   const { from, to } = eatDayRange(0);
   const summary = trpc.reports.summary.useQuery({ from, to });
-  const lowStock = trpc.reports.lowStock.useQuery({ threshold: 10 });
+  const lowStock = trpc.reports.lowStock.useQuery();
   const recent = trpc.sales.list.useQuery({ limit: 10 });
 
   const d = summary.data;
@@ -108,7 +108,9 @@ export default function Dashboard() {
             {(lowStock.data ?? []).map((row) => (
               <li key={`${row.id}-${row.shop}`} className="px-4 py-2.5 flex items-center gap-3 text-sm">
                 <span className="flex-1 truncate">{row.name}</span>
-                <span className="text-xs text-muted-foreground">Shop {row.shop}</span>
+                <span className="text-xs text-muted-foreground">
+                  Shop {row.shop} · alert at {formatQty(row.lowStockAt)}
+                </span>
                 <span
                   className={`font-figures font-semibold ${
                     row.qty <= 0 ? "text-destructive" : "text-warning"

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, ne, or, gte, lt, inArray, sql } from "drizzle-orm";
-import { debtPayments, debts, products, saleItems, sales, stocks } from "@db/schema";
+import { customers, debtPayments, debts, productPackages, products, saleItems, sales, stocks } from "@db/schema";
 import { getDb } from "../queries/connection";
 import { createRouter, authedQuery, adminQuery } from "../middleware";
 import {
@@ -14,9 +14,12 @@ import { log } from "../lib/logger";
 
 const lineInput = z.object({
   productId: z.number().int(),
+  // Selling quantity: base units for a normal line, PACKS when packId is set
+  // (e.g. qty 2 with packId of "crate of 30" = 60 eggs leave the shelf).
   qty: z.number().positive(),
-  priceType: z.enum(["retail", "wholesale"]).default("retail"),
-  unitPrice: z.number().int().min(0), // cents — may differ from list price (bargain)
+  // When set, the line sells this packaging option at its pack price.
+  packId: z.number().int().optional(),
+  unitPrice: z.number().int().min(0).optional(), // cents per unit — may differ from list (bargain)
 });
 
 function receiptNo(shop: string, id: number): string {
@@ -78,12 +81,17 @@ export function customerCredit(db: DbOrTx, shop: "A" | "B", phone: string): numb
 type PreparedLine = {
   productId: number;
   name: string;
+  // Always BASE UNITS (pack lines store qty × pack size so stock and cost
+  // stay exact; the receipt shows the pack count via packName/packUnits).
   qty: number;
   priceType: "retail" | "wholesale";
-  unitPrice: number;
-  listPrice: number;
+  unitPrice: number; // cents per base unit
+  listPrice: number; // list price per base unit
   buyingPrice: number;
   lineTotal: number;
+  packName: string | null;
+  packUnits: number | null; // base units per pack (for receipt display)
+  packCount: number | null; // packs sold (for lastSoldPrice bookkeeping)
 };
 
 export const salesRouter = createRouter({
@@ -129,11 +137,37 @@ export const salesRouter = createRouter({
           message: "Debt sales need the customer's name and phone number",
         });
       }
+      // Debt is for registered customers only: the admin maintains the list,
+      // a cashier can only sell on debt to someone already on it.
+      let debtCustomer: { name: string; phone: string } | null = null;
+      if (input.paymentMethod === "debt" || splitDebt) {
+        const phone = input.customerPhone!.trim();
+        const known = db
+          .select()
+          .from(customers)
+          .where(and(eq(customers.shop, shop), eq(customers.phone, phone)))
+          .get();
+        if (!known) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "This customer is not registered for debt — ask the admin to add them from the Debts page first",
+          });
+        }
+        debtCustomer = { name: known.name, phone: known.phone };
+      }
 
       // Validate lines against the live catalogue and compute totals.
       const ids = input.lines.map((l) => l.productId);
       const catalog = db.select().from(products).where(inArray(products.id, ids)).all();
       const byId = new Map(catalog.map((p) => [p.id, p]));
+      const packIds = input.lines
+        .map((l) => l.packId)
+        .filter((id): id is number => id !== undefined);
+      const packRows = packIds.length
+        ? db.select().from(productPackages).where(inArray(productPackages.id, packIds)).all()
+        : [];
+      const packById = new Map(packRows.map((pk) => [pk.id, pk]));
 
       const lines: PreparedLine[] = [];
       for (const l of input.lines) {
@@ -141,13 +175,55 @@ export const salesRouter = createRouter({
         if (!p || !p.active) {
           throw new TRPCError({ code: "BAD_REQUEST", message: `Product #${l.productId} is not available` });
         }
-        const listPrice =
-          l.priceType === "retail" ? p.retailPrice : p.wholesalePrice;
-        if (l.unitPrice !== listPrice && !p.allowBargain && user.role !== "admin") {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `Price of "${p.name}" cannot be adjusted`,
-          });
+        let baseQty: number;
+        let unitPrice: number;
+        let listPrice: number;
+        let lineTotal: number;
+        let packName: string | null = null;
+        let packUnits: number | null = null;
+        let packCount: number | null = null;
+        if (l.packId !== undefined) {
+          // Pack sale: qty counts PACKS, priced at the pack's own price;
+          // stock leaves in base units (packs × pack size).
+          const pack = packById.get(l.packId);
+          if (!pack || pack.productId !== p.id) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `That packaging option is not available for "${p.name}"`,
+            });
+          }
+          packCount = l.qty;
+          baseQty = l.qty * pack.qty;
+          lineTotal = Math.round(l.qty * pack.price);
+          unitPrice = Math.round(lineTotal / baseQty);
+          listPrice = Math.round(pack.price / pack.qty);
+          packName = pack.name;
+          packUnits = pack.qty;
+          if (p.minPrice != null && p.minPrice > 0 && unitPrice < p.minPrice) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `"${p.name}" cannot sell below KES ${(p.minPrice / 100).toFixed(2)} per ${p.unit}`,
+            });
+          }
+        } else {
+          const agreed = l.unitPrice ?? p.retailPrice;
+          if (agreed !== p.retailPrice && !p.allowBargain && user.role !== "admin") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Price of "${p.name}" cannot be adjusted`,
+            });
+          }
+          // Price floor: never accept less than the product's minimum price.
+          if (p.minPrice != null && p.minPrice > 0 && agreed < p.minPrice) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `"${p.name}" cannot sell below KES ${(p.minPrice / 100).toFixed(2)}`,
+            });
+          }
+          baseQty = l.qty;
+          unitPrice = agreed;
+          listPrice = p.retailPrice;
+          lineTotal = Math.round(agreed * l.qty);
         }
         const stock = db
           .select()
@@ -155,7 +231,7 @@ export const salesRouter = createRouter({
           .where(and(eq(stocks.productId, p.id), eq(stocks.shop, shop)))
           .get();
         const available = stock?.qty ?? 0;
-        if (available < l.qty) {
+        if (available < baseQty) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: `Not enough stock for "${p.name}" in Shop ${shop} (${available} ${p.unit} left)`,
@@ -164,12 +240,15 @@ export const salesRouter = createRouter({
         lines.push({
           productId: p.id,
           name: p.name,
-          qty: l.qty,
-          priceType: l.priceType,
-          unitPrice: l.unitPrice,
+          qty: baseQty,
+          priceType: "retail",
+          unitPrice,
           listPrice,
           buyingPrice: p.buyingPrice,
-          lineTotal: Math.round(l.unitPrice * l.qty),
+          lineTotal,
+          packName,
+          packUnits,
+          packCount,
         });
       }
 
@@ -178,9 +257,7 @@ export const salesRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Discount is more than the total" });
       }
       const total = subtotal - input.discount;
-      const mode = lines.some((l) => l.priceType === "wholesale")
-        ? ("wholesale" as const)
-        : ("retail" as const);
+      const mode = "retail" as const;
       const now = new Date().toISOString();
 
       // Insert sale + lines, decrement stock, remember each product's last
@@ -216,8 +293,8 @@ export const salesRouter = createRouter({
             change: fields.change ?? null,
             cashAmount: fields.cashAmount ?? null,
             mpesaAmount: fields.mpesaAmount ?? null,
-            customerName: input.customerName?.trim() || null,
-            customerPhone: input.customerPhone?.trim() || null,
+            customerName: debtCustomer?.name ?? input.customerName?.trim() ?? null,
+            customerPhone: debtCustomer?.phone ?? input.customerPhone?.trim() ?? null,
             debtId: fields.debtId ?? null,
             mpesaRequestId: fields.mpesaRequestId ?? null,
             mpesaReference: fields.mpesaReference ?? null,
@@ -226,7 +303,8 @@ export const salesRouter = createRouter({
         const id = Number(info.lastInsertRowid);
         t.update(sales).set({ receiptNo: receiptNo(shopId, id) }).where(eq(sales.id, id)).run();
         for (const l of lines) {
-          t.insert(saleItems).values({ saleId: id, ...l }).run();
+          const { packCount: _packCount, ...itemRow } = l;
+          t.insert(saleItems).values({ saleId: id, ...itemRow }).run();
           t.update(stocks)
             .set({ qty: sql`${stocks.qty} - ${l.qty}` })
             .where(and(eq(stocks.productId, l.productId), eq(stocks.shop, shopId)))
@@ -308,8 +386,8 @@ export const salesRouter = createRouter({
       // already has a running tab, this purchase is added to it; any store
       // credit from previous overpayments is applied automatically. ---
       if (input.paymentMethod === "debt") {
-        const phone = input.customerPhone!.trim();
-        const name = input.customerName!.trim();
+        const phone = debtCustomer!.phone;
+        const name = debtCustomer!.name;
 
         const { saleId, creditApplied } = db.transaction((t) => {
           const { debtId, creditApplied } = applyDebtTx(t, shop, phone, name, total);
@@ -349,8 +427,8 @@ export const salesRouter = createRouter({
           });
         }
         const debtPart = total - cashPart;
-        const phone = input.customerPhone!.trim();
-        const name = input.customerName!.trim();
+        const phone = debtCustomer!.phone;
+        const name = debtCustomer!.name;
 
         const { saleId, creditApplied } = db.transaction((t) => {
           const { debtId, creditApplied } = applyDebtTx(t, shop, phone, name, debtPart);

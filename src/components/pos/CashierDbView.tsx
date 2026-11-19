@@ -11,13 +11,19 @@ import {
 } from "@/components/ui/dialog";
 import { trpc } from "@/providers/trpc";
 import { CategorySelect } from "@/components/CategorySelect";
+import {
+  PackagesEditor,
+  parsePacks,
+  type PackFormRow,
+} from "@/components/PackagesEditor";
 import { useAuth } from "@/lib/auth";
 import { errorMessage } from "@/lib/auth";
 import { formatKes, formatPlain, formatQty, parseKes } from "@/lib/money";
-import { Boxes, Pencil, Plus, ScanBarcode, Search } from "lucide-react";
+import { ArrowRightLeft, Boxes, Pencil, Plus, ScanBarcode, Search } from "lucide-react";
 
-// Cashier database page: create products, top up stock, and adjust selling
-// prices (retail / wholesale) without needing the admin panel.
+// Cashier database page: create products, top up stock, transfer stock to the
+// other shop, and adjust selling prices / price floor / low-stock level
+// without needing the admin panel.
 
 type Row = {
   id: number;
@@ -27,32 +33,46 @@ type Row = {
   category: string;
   unit: string;
   retailPrice: number;
-  wholesalePrice: number;
-  wholesaleMinQty: number;
+  minPrice: number | null;
+  lowStockAt: number;
   stockQty: number;
+  packages: {
+    id: number;
+    productId: number;
+    name: string;
+    qty: number;
+    price: number;
+    barcode: string | null;
+  }[];
 };
 
 export function CashierDbView() {
   const { user } = useAuth();
   const shop = user?.shop ?? "A";
+  const otherShop = shop === "A" ? "B" : "A";
   const [search, setSearch] = useState("");
   const [stockText, setStockText] = useState<Record<number, string>>({});
   const [editing, setEditing] = useState<Row | null>(null);
   const [retail, setRetail] = useState("");
-  const [wholesale, setWholesale] = useState("");
-  const [minQty, setMinQty] = useState("1");
+  const [minPrice, setMinPrice] = useState("");
+  const [lowStockAt, setLowStockAt] = useState("5");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [transfer, setTransfer] = useState<Row | null>(null);
+  const [transferQty, setTransferQty] = useState("");
+  const [transferError, setTransferError] = useState<string | null>(null);
   const [newProduct, setNewProduct] = useState({
     name: "",
     code: "",
     category: "",
     unit: "pc",
     retail: "",
-    wholesale: "",
+    minPrice: "",
     buying: "",
     stock: "",
+    lowStockAt: "5",
   });
+  const [newPacks, setNewPacks] = useState<PackFormRow[]>([]);
   const [createError, setCreateError] = useState<string | null>(null);
 
   const listQuery = trpc.products.listForShop.useQuery({ shop });
@@ -68,9 +88,18 @@ export function CashierDbView() {
     onSuccess: () => {
       listQuery.refetch();
       setEditing(null);
-      flash("Prices updated");
+      flash("Product updated");
     },
     onError: (e) => setError(errorMessage(e)),
+  });
+  const transferStock = trpc.products.transfer.useMutation({
+    onSuccess: () => {
+      listQuery.refetch();
+      setTransfer(null);
+      setTransferQty("");
+      flash(`Stock moved to Shop ${otherShop}`);
+    },
+    onError: (e) => setTransferError(errorMessage(e)),
   });
   const createProduct = trpc.products.cashierCreate.useMutation({
     onSuccess: () => {
@@ -81,10 +110,12 @@ export function CashierDbView() {
         category: "",
         unit: "pc",
         retail: "",
-        wholesale: "",
+        minPrice: "",
         buying: "",
         stock: "",
+        lowStockAt: "5",
       });
+      setNewPacks([]);
       setCreateError(null);
       flash("Product created");
     },
@@ -111,12 +142,13 @@ export function CashierDbView() {
 
   function submitNewProduct() {
     const retailPrice = parseKes(newProduct.retail);
-    const wholesalePrice = newProduct.wholesale.trim()
-      ? parseKes(newProduct.wholesale)
-      : 0;
+    const min = newProduct.minPrice.trim() ? parseKes(newProduct.minPrice) : null;
     const buyingPrice = newProduct.buying.trim()
       ? parseKes(newProduct.buying)
       : 0;
+    const lowStockAt = newProduct.lowStockAt.trim()
+      ? Number(newProduct.lowStockAt)
+      : 5;
     if (!newProduct.name.trim() || !newProduct.code.trim()) {
       setCreateError("Name and barcode/SKU are required");
       return;
@@ -125,8 +157,17 @@ export function CashierDbView() {
       setCreateError("Enter a valid retail price");
       return;
     }
-    if (wholesalePrice === null || buyingPrice === null) {
-      setCreateError("Enter valid prices (or leave the optional ones empty)");
+    if (newProduct.minPrice.trim() && min === null) {
+      setCreateError("Enter a valid minimum price, or leave it empty");
+      return;
+    }
+    if (buyingPrice === null || !Number.isFinite(lowStockAt) || lowStockAt < 0) {
+      setCreateError("Enter valid numbers (or leave the optional ones empty)");
+      return;
+    }
+    const packages = parsePacks(newPacks, parseKes);
+    if (packages === null) {
+      setCreateError("Every package needs a name, a quantity and a selling price");
       return;
     }
     createProduct.mutate({
@@ -135,7 +176,9 @@ export function CashierDbView() {
       category: newProduct.category.trim() || "General",
       unit: newProduct.unit.trim() || "pc",
       retailPrice,
-      wholesalePrice,
+      minPrice: min,
+      lowStockAt,
+      packages,
       buyingPrice,
       initialStock: Number(newProduct.stock) || 0,
     });
@@ -144,25 +187,49 @@ export function CashierDbView() {
   function openEdit(p: Row) {
     setEditing(p);
     setRetail(formatPlain(p.retailPrice));
-    setWholesale(formatPlain(p.wholesalePrice));
-    setMinQty(String(p.wholesaleMinQty));
+    setMinPrice(p.minPrice !== null ? formatPlain(p.minPrice) : "");
+    setLowStockAt(String(p.lowStockAt));
     setError(null);
   }
 
   function savePrices() {
     if (!editing) return;
     const retailPrice = parseKes(retail);
-    const wholesalePrice = parseKes(wholesale);
-    if (retailPrice === null || wholesalePrice === null) {
-      setError("Enter valid prices");
+    const min = minPrice.trim() ? parseKes(minPrice) : null;
+    const lowStock = Number(lowStockAt);
+    if (retailPrice === null) {
+      setError("Enter a valid retail price");
+      return;
+    }
+    if (minPrice.trim() && min === null) {
+      setError("Enter a valid minimum price, or leave it empty");
+      return;
+    }
+    if (!Number.isFinite(lowStock) || lowStock < 0) {
+      setError("Enter a valid low stock level");
       return;
     }
     updatePrices.mutate({
       id: editing.id,
       retailPrice,
-      wholesalePrice,
-      wholesaleMinQty: Number(minQty) || 1,
+      minPrice: min,
+      lowStockAt: lowStock,
     });
+  }
+
+  function submitTransfer() {
+    if (!transfer) return;
+    const qty = Number(transferQty);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setTransferError("Enter how many to transfer");
+      return;
+    }
+    if (qty > transfer.stockQty) {
+      setTransferError(`Only ${formatQty(transfer.stockQty)} ${transfer.unit} in stock here`);
+      return;
+    }
+    setTransferError(null);
+    transferStock.mutate({ productId: transfer.id, from: shop, qty });
   }
 
   return (
@@ -231,11 +298,11 @@ export function CashierDbView() {
               className="bg-background border-input h-9 text-sm font-figures"
             />
             <Input
-              placeholder="Wholesale price (optional)"
+              placeholder="Min selling price (optional)"
               inputMode="decimal"
-              value={newProduct.wholesale}
+              value={newProduct.minPrice}
               onChange={(e) =>
-                setNewProduct((s) => ({ ...s, wholesale: e.target.value }))
+                setNewProduct((s) => ({ ...s, minPrice: e.target.value }))
               }
               className="bg-background border-input h-9 text-sm font-figures"
             />
@@ -257,6 +324,22 @@ export function CashierDbView() {
               }
               className="bg-background border-input h-9 text-sm font-figures"
             />
+            <Input
+              placeholder="Low stock alert at (5)"
+              inputMode="decimal"
+              value={newProduct.lowStockAt}
+              onChange={(e) =>
+                setNewProduct((s) => ({ ...s, lowStockAt: e.target.value }))
+              }
+              className="bg-background border-input h-9 text-sm font-figures"
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            <PackagesEditor
+              packs={newPacks}
+              onChange={setNewPacks}
+              unit={newProduct.unit.trim() || "pc"}
+            />
           </div>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             {createError ? (
@@ -265,8 +348,9 @@ export function CashierDbView() {
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Category, wholesale & buying price are optional — set the buying
-                price now so profit counts correctly, or the admin can set it later.
+                Category, min price, buying price & packaging are optional — set
+                the buying price now so profit counts correctly, or the admin can
+                set it later.
               </p>
             )}
             <Button
@@ -314,9 +398,16 @@ export function CashierDbView() {
                       {p.sku}
                       {p.barcode ? ` · ⌗${p.barcode}` : ""} · per {p.unit}
                     </p>
+                    {p.packages.length > 0 && (
+                      <p className="text-[10px] font-figures text-warning">
+                        {p.packages
+                          .map((pk) => `${pk.name} ×${formatQty(pk.qty)} @ ${formatKes(pk.price)}`)
+                          .join(" · ")}
+                      </p>
+                    )}
                   </div>
                   <span
-                    className={`font-figures text-sm ${p.stockQty <= 5 ? "text-warning" : "text-muted-foreground"}`}
+                    className={`font-figures text-sm ${p.stockQty <= p.lowStockAt ? "text-warning" : "text-muted-foreground"}`}
                   >
                     {formatQty(p.stockQty)} {p.unit} in stock
                   </span>
@@ -348,6 +439,21 @@ export function CashierDbView() {
                     >
                       Add
                     </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-border h-8 gap-1"
+                      disabled={p.stockQty <= 0}
+                      title={`Move stock to Shop ${otherShop}`}
+                      onClick={() => {
+                        setTransfer(p);
+                        setTransferQty("");
+                        setTransferError(null);
+                      }}
+                    >
+                      <ArrowRightLeft className="size-3.5" />
+                      Transfer
+                    </Button>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap text-sm">
@@ -356,14 +462,12 @@ export function CashierDbView() {
                     {formatKes(p.retailPrice)}
                   </span>
                   <span className="font-figures">
-                    <span className="micro-label mr-1.5">Wholesale</span>
-                    <span className="text-warning">
-                      {formatKes(p.wholesalePrice)}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground">
-                      {" "}
-                      min {formatQty(p.wholesaleMinQty)}
-                    </span>
+                    <span className="micro-label mr-1.5">Min</span>
+                    {p.minPrice !== null && p.minPrice > 0 ? (
+                      formatKes(p.minPrice)
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </span>
                   <Button
                     variant="ghost"
@@ -388,7 +492,7 @@ export function CashierDbView() {
               Edit prices — {editing?.name}
             </DialogTitle>
             <DialogDescription className="sr-only">
-              Update retail and wholesale selling prices
+              Update the selling price, minimum price and low-stock level
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
@@ -402,24 +506,29 @@ export function CashierDbView() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Wholesale price (KES)</Label>
+              <Label>Minimum selling price (KES)</Label>
               <Input
                 inputMode="decimal"
-                value={wholesale}
-                onChange={(e) => setWholesale(e.target.value)}
+                value={minPrice}
+                onChange={(e) => setMinPrice(e.target.value)}
                 className="bg-background border-input font-figures"
+                placeholder="Optional — leave empty for no floor"
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Wholesale min qty</Label>
+              <Label>Low stock alert at</Label>
               <Input
                 inputMode="decimal"
-                value={minQty}
-                onChange={(e) => setMinQty(e.target.value)}
+                value={lowStockAt}
+                onChange={(e) => setLowStockAt(e.target.value)}
                 className="bg-background border-input font-figures"
               />
             </div>
           </div>
+          <p className="text-xs text-muted-foreground">
+            The till refuses to sell below the minimum price. Packaging options
+            are managed by the admin.
+          </p>
           {error && (
             <p className="text-sm text-destructive" role="alert">
               {error}
@@ -431,6 +540,49 @@ export function CashierDbView() {
             className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
           >
             {updatePrices.isPending ? "Saving…" : "Save prices"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      {/* Stock transfer to the other shop */}
+      <Dialog open={transfer !== null} onOpenChange={(o) => !o && setTransfer(null)}>
+        <DialogContent className="bg-card border-border sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              Transfer — {transfer?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Move stock from Shop {shop} to Shop {otherShop}. It is subtracted
+              here and added there immediately.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label>
+              Quantity to move ({transfer?.unit}) — {formatQty(transfer?.stockQty ?? 0)}{" "}
+              available
+            </Label>
+            <Input
+              inputMode="decimal"
+              autoFocus
+              value={transferQty}
+              onChange={(e) => setTransferQty(e.target.value)}
+              className="bg-background border-input h-11 font-figures text-lg"
+              placeholder="e.g. 3"
+            />
+          </div>
+          {transferError && (
+            <p className="text-sm text-destructive" role="alert">
+              {transferError}
+            </p>
+          )}
+          <Button
+            onClick={submitTransfer}
+            disabled={transferStock.isPending}
+            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
+          >
+            {transferStock.isPending
+              ? "Transferring…"
+              : `Move to Shop ${otherShop}`}
           </Button>
         </DialogContent>
       </Dialog>
